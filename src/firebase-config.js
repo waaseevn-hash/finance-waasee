@@ -8,12 +8,12 @@
  * =====================================================================
  */
 export const firebaseConfig = {
-  apiKey: 'DAN_API_KEY_VAO_DAY',
-  authDomain: 'ten-du-an.firebaseapp.com',
-  projectId: 'ten-du-an',
-  storageBucket: 'ten-du-an.firebasestorage.app',
-  messagingSenderId: '000000000000',
-  appId: '1:000000000000:web:0000000000000000',
+  apiKey: 'AIzaSyBNnkTUXKSs2RRPJ5pEU66hbVe5KuJvOuM',
+  authDomain: 'finance-waasee.firebaseapp.com',
+  projectId: 'finance-waasee',
+  storageBucket: 'finance-waasee.firebasestorage.app',
+  messagingSenderId: '320039228402',
+  appId: '1:320039228402:web:78097d42c6765a8561516b',
 };
 
 /** Gmail của Chủ doanh nghiệp — phải trùng với OWNER trong firestore.rules */
