@@ -15,4 +15,7 @@ if (auth) setPersistence(auth, browserLocalPersistence).catch(() => {});
 export const db = app ? initializeFirestore(app, { ignoreUndefinedProperties: true }) : null;
 
 export const googleProvider = new GoogleAuthProvider();
+// Xin rõ quyền đọc địa chỉ Gmail: danh sách trắng và luật bảo mật đều dựa trên email
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
 googleProvider.setCustomParameters({ prompt: 'select_account' });

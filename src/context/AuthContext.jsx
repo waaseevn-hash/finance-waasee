@@ -29,7 +29,12 @@ export function AuthProvider({ children }) {
         setState({ status: 'signedOut', user: null, member: null });
         return;
       }
-      const email = String(u.email || '').toLowerCase();
+      const email = String(u.email || u.providerData?.find((x) => x?.email)?.email || '').toLowerCase();
+      if (!email) {
+        // Tài khoản Google chưa trả về địa chỉ Gmail -> không xác định được quyền
+        setState({ status: 'denied', user: u, member: null, error: 'no-email' });
+        return;
+      }
       const ref = doc(db, C.members, email);
       let touched = false;
       let bootstrapping = false;
@@ -83,7 +88,7 @@ export function AuthProvider({ children }) {
 
   const value = useMemo(() => {
     const u = state.user;
-    const email = u ? String(u.email || '').toLowerCase() : '';
+    const email = u ? String(u.email || u.providerData?.find((x) => x?.email)?.email || '').toLowerCase() : '';
     const name = state.member?.displayName || u?.displayName || email;
     return {
       ...state,

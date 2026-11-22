@@ -78,21 +78,51 @@ export function LoginScreen() {
 }
 
 export function AccessDenied() {
-  const { user, member, signOut, error } = useAuth();
+  const { user, member, signOut, signIn, error } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   const locked = member && member.active !== true;
+  const noEmail = error === 'no-email';
+  const relogin = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await signIn();
+    } catch (e) {
+      setErr(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Shell>
       <span className="grid h-12 w-12 place-items-center rounded-2xl bg-rose-50 text-rose-600 mb-4">
         <ShieldAlert className="h-6 w-6" />
       </span>
-      <h1 className="font-display text-lg font-semibold text-ink-900">{locked ? 'Tài khoản đã bị khóa' : 'Không có quyền truy cập'}</h1>
-      <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-        Gmail <b className="text-ink-900">{user?.email}</b>{' '}
-        {locked ? 'đã bị Chủ doanh nghiệp tạm khóa quyền truy cập.' : 'chưa được cấp quyền. Hệ thống không hiển thị bất kỳ số liệu nào.'}
-      </p>
-      <p className="mt-2 text-sm text-slate-500">Nếu bạn là người trong công ty, hãy nhờ Chủ doanh nghiệp thêm Gmail này ở trang Phân quyền.</p>
-      {error && <p className="mt-2 text-xs text-slate-400">Mã lỗi: {error}</p>}
-      <Button variant="primary" size="lg" icon={LogOut} className="mt-6 w-full" onClick={signOut}>
+      {noEmail ? (
+        <>
+          <h1 className="font-display text-lg font-semibold text-ink-900">Chưa nhận được địa chỉ Gmail</h1>
+          <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+            Google chưa chia sẻ địa chỉ Gmail của tài khoản <b className="text-ink-900">{user?.displayName || ''}</b> cho app, nên chưa kiểm tra được quyền. Bấm đăng nhập lại và
+            đồng ý cho app xem địa chỉ email.
+          </p>
+          <Button variant="primary" size="lg" className="mt-6 w-full" onClick={relogin} loading={busy}>
+            Đăng nhập lại bằng Google
+          </Button>
+          {err && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</p>}
+        </>
+      ) : (
+        <>
+          <h1 className="font-display text-lg font-semibold text-ink-900">{locked ? 'Tài khoản đã bị khóa' : 'Không có quyền truy cập'}</h1>
+          <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+            Gmail <b className="text-ink-900">{user?.email || user?.providerData?.find((x) => x?.email)?.email}</b>{' '}
+            {locked ? 'đã bị Chủ doanh nghiệp tạm khóa quyền truy cập.' : 'chưa được cấp quyền. Hệ thống không hiển thị bất kỳ số liệu nào.'}
+          </p>
+          <p className="mt-2 text-sm text-slate-500">Nếu bạn là người trong công ty, hãy nhờ Chủ doanh nghiệp thêm Gmail này ở trang Phân quyền.</p>
+          {error && <p className="mt-2 text-xs text-slate-400">Mã lỗi: {error}</p>}
+        </>
+      )}
+      <Button variant={noEmail ? 'secondary' : 'primary'} size="lg" icon={LogOut} className="mt-3 w-full" onClick={signOut}>
         Đăng xuất / Dùng Gmail khác
       </Button>
     </Shell>
