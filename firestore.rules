@@ -1,0 +1,327 @@
+rules_version = '2';
+
+// =====================================================================
+//  LUẬT BẢO MẬT FIRESTORE — Quản lý Dòng tiền
+// ---------------------------------------------------------------------
+//  1. Danh sách trắng: chỉ Gmail có trong /members và active == true
+//     mới đọc/ghi được dữ liệu. Người lạ có link cũng không thấy gì.
+//  2. Vai trò:
+//       OWNER    : toàn quyền + quản lý thành viên + xem nhật ký
+//       CO_OWNER : toàn quyền dòng tiền, duyệt chi
+//       STAFF    : CHỈ công nợ phải thu / phải trả, danh bạ NCC,
+//                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt
+//  3. Nhật ký bắt buộc: mọi thay đổi số liệu phải kèm 1 dòng
+//     audit_logs tạo CÙNG LÚC, đúng tài liệu, đúng hành động, đúng
+//     người. Nhật ký không ai sửa / xóa được.
+//  4. Mặc định: TỪ CHỐI mọi đường dẫn không khai báo bên dưới.
+// =====================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- Danh tính & vai trò ----------------
+    function ownerEmail() {
+      return 'waaseevn@gmail.com';
+    }
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+    function memberPath() {
+      return /databases/$(database)/documents/members/$(myEmail());
+    }
+    function isMember() {
+      return signedIn() && exists(memberPath()) && get(memberPath()).data.active == true;
+    }
+    function myRole() {
+      return get(memberPath()).data.role;
+    }
+    function isOwner() {
+      return isMember() && myRole() == 'OWNER';
+    }
+    function isManager() {
+      return isMember() && myRole() in ['OWNER', 'CO_OWNER'];
+    }
+    function isStaffOrAbove() {
+      return isMember() && myRole() in ['OWNER', 'CO_OWNER', 'STAFF'];
+    }
+
+    // ---------------- Nhật ký bắt buộc ----------------
+    function logPath(id) {
+      return /databases/$(database)/documents/audit_logs/$(id);
+    }
+    function logAfter(id) {
+      return getAfter(logPath(id)).data;
+    }
+    // Thêm / sửa: tài liệu mang _auditId trỏ tới 1 dòng nhật ký MỚI tạo trong cùng lô ghi
+    function audited(path, action) {
+      let aid = request.resource.data._auditId;
+      return aid is string
+        && !exists(logPath(aid))
+        && logAfter(aid).docPath == path
+        && logAfter(aid).action == action
+        && logAfter(aid).actorEmail == myEmail();
+    }
+    // Xóa: mã nhật ký cố định = DEL_<collection>_<id>_<_auditId hiện tại>
+    function auditedDelete(coll, id) {
+      let aid = 'DEL_' + coll + '_' + id + '_' + resource.data.get('_auditId', 'none');
+      return !exists(logPath(aid))
+        && logAfter(aid).docPath == coll + '/' + id
+        && logAfter(aid).action == 'DELETE'
+        && logAfter(aid).actorEmail == myEmail();
+    }
+
+    // ---------------- Kiểm tra dữ liệu ----------------
+    function isDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function isDateOrEmpty(v) {
+      return v == '' || isDate(v);
+    }
+    function nonNeg(v) {
+      return (v is int || v is float) && v >= 0;
+    }
+    function pos(v) {
+      return (v is int || v is float) && v > 0;
+    }
+    function shortText(v, max) {
+      return v is string && v.size() <= max;
+    }
+    function createdByMe() {
+      return request.resource.data.createdBy == myEmail();
+    }
+    function keepsCreator() {
+      return request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '');
+    }
+
+    function validCash(d) {
+      return d.type in ['IN', 'OUT']
+        && pos(d.amount)
+        && isDate(d.date)
+        && shortText(d.description, 500) && d.description.size() > 0
+        && shortText(d.get('counterparty', ''), 300)
+        && shortText(d.get('note', ''), 2000);
+    }
+    function validBank(d) {
+      return shortText(d.name, 200) && d.name.size() > 0
+        && nonNeg(d.creditLimit)
+        && nonNeg(d.depositBalance);
+    }
+    function validLoan(d) {
+      return d.bankId is string
+        && shortText(d.contractNo, 100) && d.contractNo.size() > 0
+        && pos(d.amount)
+        && isDate(d.disbursedDate)
+        && isDate(d.maturityDate)
+        && nonNeg(d.interestRate) && d.interestRate <= 100
+        && d.status in ['ACTIVE', 'SETTLED'];
+    }
+    function validDebt(d) {
+      return shortText(d.partnerName, 300) && d.partnerName.size() > 0
+        && nonNeg(d.total)
+        && nonNeg(d.paid)
+        && d.paid <= d.total
+        && isDateOrEmpty(d.get('dueDate', ''));
+    }
+    function validReceivable(d) {
+      return validDebt(d) && d.certainty in ['SURE', 'MAYBE_LATE', 'DOUBTFUL'];
+    }
+    function validPayable(d) {
+      return validDebt(d) && d.priority in ['P1', 'P2', 'P3'];
+    }
+    function validPayment(d) {
+      return d.kind in ['AR', 'AP']
+        && d.parentId is string
+        && pos(d.amount)
+        && isDate(d.date)
+        && d.method in ['CASH', 'BANK', 'OTHER']
+        && (
+          (d.kind == 'AR' && existsAfter(/databases/$(database)/documents/receivables/$(d.parentId)))
+          || (d.kind == 'AP' && existsAfter(/databases/$(database)/documents/payables/$(d.parentId)))
+        );
+    }
+    function validPartner(d) {
+      return shortText(d.name, 300) && d.name.size() > 0;
+    }
+    function validApproval(d) {
+      return d.payableId is string
+        && d.mode in ['FULL', 'PART']
+        && nonNeg(d.amount)
+        && d.status in ['OPEN', 'DONE', 'CANCELLED'];
+    }
+    // Kế toán chỉ được chuyển lệnh chi từ "chờ chuyển" sang "đã chuyển tiền"
+    function staffExecutes() {
+      return resource.data.status == 'OPEN'
+        && request.resource.data.status == 'DONE'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'paidAmount', 'paidOn', 'paymentId', 'updatedBy', 'updatedAt', '_auditId']);
+    }
+    function validMember(email) {
+      let d = request.resource.data;
+      return d.email == email
+        && d.role in ['CO_OWNER', 'STAFF']
+        && d.active is bool;
+    }
+
+    // =================================================================
+    //  THÀNH VIÊN (danh sách trắng)
+    // =================================================================
+    match /members/{email} {
+      allow get: if (signedIn() && email == myEmail()) || isMember();
+      allow list: if isMember();
+      // Khởi tạo lần đầu: chỉ đúng Gmail Chủ doanh nghiệp tự tạo hồ sơ OWNER của mình
+      allow create: if signedIn()
+        && email == myEmail()
+        && email == ownerEmail()
+        && request.resource.data.email == email
+        && request.resource.data.role == 'OWNER'
+        && request.resource.data.active == true;
+      // Chủ doanh nghiệp cấp quyền cho người khác (không thể tạo thêm OWNER)
+      allow create: if isOwner()
+        && email == email.lower()
+        && email != myEmail()
+        && validMember(email)
+        && createdByMe()
+        && audited('members/' + email, 'CREATE');
+      // Mỗi người tự cập nhật tên / ảnh / lần truy cập của mình (không đổi được vai trò)
+      allow update: if signedIn()
+        && email == myEmail()
+        && resource.data.active == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastSeenAt']);
+      // Không ai sửa / khóa / xóa được tài khoản OWNER qua ứng dụng
+      allow update: if isOwner()
+        && email != myEmail()
+        && resource.data.role != 'OWNER'
+        && validMember(email)
+        && audited('members/' + email, 'UPDATE');
+      allow delete: if isOwner()
+        && email != myEmail()
+        && resource.data.role != 'OWNER'
+        && auditedDelete('members', email);
+    }
+
+    // =================================================================
+    //  TIỀN MẶT, NGÂN HÀNG, KHẾ ƯỚC VAY — chỉ OWNER / CO_OWNER
+    // =================================================================
+    match /cash_entries/{id} {
+      allow read: if isManager();
+      allow create: if isManager() && validCash(request.resource.data) && createdByMe()
+        && audited('cash_entries/' + id, 'CREATE');
+      allow update: if isManager() && validCash(request.resource.data) && keepsCreator()
+        && audited('cash_entries/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('cash_entries', id);
+    }
+
+    match /banks/{id} {
+      allow read: if isManager();
+      allow create: if isManager() && validBank(request.resource.data) && createdByMe()
+        && audited('banks/' + id, 'CREATE');
+      allow update: if isManager() && validBank(request.resource.data) && keepsCreator()
+        && audited('banks/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('banks', id);
+    }
+
+    match /loans/{id} {
+      allow read: if isManager();
+      allow create: if isManager() && validLoan(request.resource.data) && createdByMe()
+        && audited('loans/' + id, 'CREATE');
+      allow update: if isManager() && validLoan(request.resource.data) && keepsCreator()
+        && audited('loans/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('loans', id);
+    }
+
+    // =================================================================
+    //  CÔNG NỢ & DANH BẠ NCC — STAFF xem & nhập, chỉ OWNER / CO_OWNER xóa
+    // =================================================================
+    match /receivables/{id} {
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && validReceivable(request.resource.data) && createdByMe()
+        && audited('receivables/' + id, 'CREATE');
+      allow update: if isStaffOrAbove() && validReceivable(request.resource.data) && keepsCreator()
+        && audited('receivables/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('receivables', id);
+    }
+
+    match /payables/{id} {
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && validPayable(request.resource.data) && createdByMe()
+        && audited('payables/' + id, 'CREATE');
+      allow update: if isStaffOrAbove() && validPayable(request.resource.data) && keepsCreator()
+        && audited('payables/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('payables', id);
+    }
+
+    // Lịch sử thanh toán từng đợt: không sửa, chỉ thêm / xóa (xóa: OWNER / CO_OWNER)
+    match /payments/{id} {
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && validPayment(request.resource.data) && createdByMe()
+        && audited('payments/' + id, 'CREATE');
+      allow update: if false;
+      allow delete: if isManager() && auditedDelete('payments', id);
+    }
+
+    match /partners/{id} {
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && validPartner(request.resource.data) && createdByMe()
+        && audited('partners/' + id, 'CREATE');
+      allow update: if isStaffOrAbove() && validPartner(request.resource.data) && keepsCreator()
+        && audited('partners/' + id, 'UPDATE');
+      allow delete: if isManager() && auditedDelete('partners', id);
+    }
+
+    // Lệnh duyệt chi: OWNER / CO_OWNER duyệt, sửa, hủy; STAFF chỉ ghi "đã chuyển tiền"
+    match /approvals/{id} {
+      allow read: if isStaffOrAbove();
+      allow create: if isManager() && validApproval(request.resource.data) && createdByMe()
+        && audited('approvals/' + id, 'CREATE');
+      allow update: if isManager() && validApproval(request.resource.data) && keepsCreator()
+        && audited('approvals/' + id, 'UPDATE');
+      allow update: if isStaffOrAbove() && staffExecutes() && validApproval(request.resource.data) && keepsCreator()
+        && audited('approvals/' + id, 'UPDATE');
+      allow delete: if false;
+    }
+
+    // =================================================================
+    //  ĐIỀU PHỐI THÁNG — chỉ OWNER / CO_OWNER
+    // =================================================================
+    // Bản nháp làm việc (tự lưu liên tục, không cần nhật ký từng phím gõ)
+    match /plans/{month} {
+      allow read, write: if isManager();
+    }
+    // Bản chốt: bất biến (không sửa), chỉ OWNER được xóa
+    match /plan_snapshots/{id} {
+      allow read: if isManager();
+      allow create: if isManager() && createdByMe() && request.resource.data.month is string
+        && audited('plan_snapshots/' + id, 'CREATE');
+      allow update: if false;
+      allow delete: if isOwner() && auditedDelete('plan_snapshots', id);
+    }
+    // Cài đặt: tên doanh nghiệp (mọi thành viên đọc, Chủ DN sửa); mẫu chi cố định (OWNER / CO_OWNER)
+    match /settings/{key} {
+      allow read: if (key == 'company' && isMember()) || isManager();
+      allow write: if (key == 'company' && isOwner()) || (key != 'company' && isManager());
+    }
+
+    // =================================================================
+    //  NHẬT KÝ THAO TÁC — chỉ thêm, không ai sửa / xóa được
+    // =================================================================
+    match /audit_logs/{logId} {
+      allow read: if isOwner();
+      allow create: if isMember()
+        && request.resource.data.actorEmail == myEmail()
+        && request.resource.data.at == request.time
+        && request.resource.data.action in ['CREATE', 'UPDATE', 'DELETE']
+        && request.resource.data.docPath is string;
+      allow update, delete: if false;
+    }
+    // Nhật ký cũ chuyển từ bản claude.ai: chỉ Chủ DN đọc / nhập, không sửa / xóa
+    match /audit_archive/{logId} {
+      allow read, create: if isOwner();
+      allow update, delete: if false;
+    }
+  }
+}
