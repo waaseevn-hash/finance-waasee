@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   CalendarRange,
   ChevronDown,
+  ReceiptText,
   Eye,
   EyeOff,
   HandCoins,
@@ -23,6 +24,7 @@ export const ROUTE_ICON = {
   cash: Vault,
   bank: Landmark,
   partners: HandCoins,
+  vouchers: ReceiptText,
   planner: CalendarRange,
   admin: ShieldCheck,
 };
@@ -98,6 +100,7 @@ export const ROUTE_TONE = {
   cash: 'jade',
   bank: 'sapphire',
   partners: 'vermilion',
+  vouchers: 'amber',
   planner: 'orchid',
   admin: 'ink',
 };
@@ -107,6 +110,7 @@ const NAV_DOT = {
   sapphire: 'bg-sapphire-400',
   vermilion: 'bg-vermilion-400',
   orchid: 'bg-orchid-400',
+  amber: 'bg-amber-400',
   ink: 'bg-slate-300',
 };
 const NAV_ICON = {
@@ -115,6 +119,7 @@ const NAV_ICON = {
   sapphire: 'text-sapphire-400',
   vermilion: 'text-vermilion-400',
   orchid: 'text-orchid-400',
+  amber: 'text-amber-400',
   ink: 'text-slate-300',
 };
 const MOBILE_ACTIVE = {
@@ -123,6 +128,7 @@ const MOBILE_ACTIVE = {
   sapphire: 'bg-sapphire-600',
   vermilion: 'bg-vermilion-500',
   orchid: 'bg-orchid-600',
+  amber: 'bg-amber-500',
   ink: 'bg-ink-900',
 };
 

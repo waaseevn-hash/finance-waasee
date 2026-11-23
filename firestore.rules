@@ -12,8 +12,14 @@ rules_version = '2';
 //                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt
 //  3. Nhật ký bắt buộc: mọi thay đổi số liệu phải kèm 1 dòng
 //     audit_logs tạo CÙNG LÚC, đúng tài liệu, đúng hành động, đúng
-//     người. Nhật ký không ai sửa / xóa được.
-//  4. Mặc định: TỪ CHỐI mọi đường dẫn không khai báo bên dưới.
+//     người. Nhật ký không ai sửa / xóa được. Các thao tác hàng loạt
+//     (duyệt nhiều chứng từ, kết chuyển, hủy kết chuyển) dùng 1 dòng
+//     nhật ký 'BATCH' liệt kê toàn bộ đường dẫn tài liệu bị ghi.
+//  4. Chứng từ thu chi nội bộ: mọi vai trò lập được; STAFF chỉ thấy
+//     chứng từ của mình; chỉ OWNER / CO_OWNER duyệt, từ chối, kết
+//     chuyển; chỉ OWNER hủy kết chuyển (đảo bút toán). Bút toán sổ quỹ
+//     sinh từ chứng từ bị khóa, không sửa / xóa trực tiếp được.
+//  5. Mặc định: TỪ CHỐI mọi đường dẫn không khai báo bên dưới.
 // =====================================================================
 
 service cloud.firestore {
@@ -57,14 +63,17 @@ service cloud.firestore {
     function logAfter(id) {
       return getAfter(logPath(id)).data;
     }
-    // Thêm / sửa: tài liệu mang _auditId trỏ tới 1 dòng nhật ký MỚI tạo trong cùng lô ghi
+    // Thêm / sửa: tài liệu mang _auditId trỏ tới 1 dòng nhật ký MỚI tạo trong cùng lô ghi.
+    // Nhật ký 'BATCH' (giao dịch hàng loạt) hợp lệ cho mọi đường dẫn có trong docPaths.
     function audited(path, action) {
       let aid = request.resource.data._auditId;
       return aid is string
         && !exists(logPath(aid))
-        && logAfter(aid).docPath == path
-        && logAfter(aid).action == action
-        && logAfter(aid).actorEmail == myEmail();
+        && logAfter(aid).actorEmail == myEmail()
+        && (
+          (logAfter(aid).docPath == path && logAfter(aid).action == action)
+          || (logAfter(aid).action == 'BATCH' && path in logAfter(aid).docPaths)
+        );
     }
     // Xóa: mã nhật ký cố định = DEL_<collection>_<id>_<_auditId hiện tại>
     function auditedDelete(coll, id) {
@@ -160,6 +169,35 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['status', 'paidAmount', 'paidOn', 'paymentId', 'updatedBy', 'updatedAt', '_auditId']);
     }
+    // ---------------- Chứng từ thu chi nội bộ ----------------
+    function voucherPath(id) {
+      return /databases/$(database)/documents/internal_vouchers/$(id);
+    }
+    function batchPath(id) {
+      return /databases/$(database)/documents/posting_batches/$(id);
+    }
+    function validVoucher(d) {
+      return d.type in ['TU', 'TT', 'PT', 'PC']
+        && d.status in ['DRAFT', 'PENDING', 'APPROVED', 'POSTED', 'REJECTED', 'CANCELLED']
+        && d.auto is bool
+        && d.requestedBy is string
+        && shortText(d.no, 40)
+        && isDate(d.date)
+        && shortText(d.person, 200) && d.person.size() > 0
+        && shortText(d.reason, 1000) && d.reason.size() > 0
+        && nonNeg(d.amount)
+        && shortText(d.get('postingBatchId', ''), 100)
+        && (d.type != 'TT' || (d.items is list && d.items.size() > 0 && d.items.size() <= 100 && nonNeg(d.advanceAmount)))
+        && d.get('attachments', []) is list && d.get('attachments', []).size() <= 12;
+    }
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+    // Trường do hệ thống quản lý: người lập không sửa được
+    function systemKeys() {
+      return ['auto', 'requestedBy', 'createdBy', 'postingBatchId', 'postedOn', 'postedBy', 'entries', 'cashEntryIds', 'generatedIds', 'settledAmount'];
+    }
+
     function validMember(email) {
       let d = request.resource.data;
       return d.email == email
@@ -207,13 +245,17 @@ service cloud.firestore {
     // =================================================================
     //  TIỀN MẶT, NGÂN HÀNG, KHẾ ƯỚC VAY — chỉ OWNER / CO_OWNER
     // =================================================================
+    // Bút toán sinh từ chứng từ (có voucherId) bị khóa: chỉ sửa sai bằng Hủy kết chuyển (bút toán đảo)
     match /cash_entries/{id} {
       allow read: if isManager();
       allow create: if isManager() && validCash(request.resource.data) && createdByMe()
         && audited('cash_entries/' + id, 'CREATE');
       allow update: if isManager() && validCash(request.resource.data) && keepsCreator()
+        && resource.data.get('voucherId', '') == ''
+        && request.resource.data.get('voucherId', '') == ''
         && audited('cash_entries/' + id, 'UPDATE');
-      allow delete: if isManager() && auditedDelete('cash_entries', id);
+      allow delete: if isManager() && resource.data.get('voucherId', '') == ''
+        && auditedDelete('cash_entries', id);
     }
 
     match /banks/{id} {
@@ -286,6 +328,147 @@ service cloud.firestore {
     }
 
     // =================================================================
+    //  CHỨNG TỪ THU CHI NỘI BỘ (TT 200): GĐNTU, GĐNTT, Phiếu thu, Phiếu chi
+    // =================================================================
+    match /internal_vouchers/{id} {
+      allow read: if isManager() || (isStaffOrAbove() && resource.data.requestedBy == myEmail());
+
+      // Lập mới: mọi vai trò (Nháp / Chờ duyệt). Quản lý được lập & duyệt luôn (đã cấp số).
+      allow create: if isStaffOrAbove() && createdByMe()
+        && request.resource.data.auto == false
+        && request.resource.data.requestedBy == myEmail()
+        && request.resource.data.postingBatchId == ''
+        && (
+          (request.resource.data.status in ['DRAFT', 'PENDING'] && request.resource.data.no == '')
+          || (isManager() && request.resource.data.status == 'APPROVED'
+              && request.resource.data.approvedBy == myEmail()
+              && request.resource.data.no.size() > 0)
+        )
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'CREATE');
+
+      // Phiếu thu / phiếu chi sinh tự động trong đợt kết chuyển
+      allow create: if isManager() && createdByMe()
+        && request.resource.data.auto == true
+        && request.resource.data.status == 'POSTED'
+        && request.resource.data.no.size() > 0
+        && existsAfter(batchPath(request.resource.data.postingBatchId))
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'CREATE');
+
+      // Soạn / sửa / gửi duyệt (người lập hoặc quản lý) — quản lý có thể duyệt ngay khi lưu
+      allow update: if isStaffOrAbove()
+        && (resource.data.requestedBy == myEmail() || isManager())
+        && resource.data.auto == false
+        && resource.data.status in ['DRAFT', 'PENDING', 'REJECTED']
+        && !changed().hasAny(systemKeys())
+        && (
+          (request.resource.data.status in ['DRAFT', 'PENDING']
+            && request.resource.data.no == resource.data.no
+            && !changed().hasAny(['approvedBy', 'approvedOn']))
+          || (isManager() && request.resource.data.status == 'APPROVED'
+            && request.resource.data.approvedBy == myEmail()
+            && request.resource.data.no.size() > 0
+            && (resource.data.no == '' || request.resource.data.no == resource.data.no))
+        )
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Từ chối (có lý do) hoặc hủy duyệt khi chưa kết chuyển — giữ nguyên số đã cấp
+      allow update: if isManager()
+        && resource.data.auto == false
+        && resource.data.status in ['PENDING', 'APPROVED']
+        && request.resource.data.status in ['REJECTED', 'PENDING']
+        && (request.resource.data.status == 'PENDING' || request.resource.data.rejectReason.size() > 0)
+        && request.resource.data.no == resource.data.no
+        && changed().hasOnly(['status', 'rejectReason', 'rejectedBy', 'rejectedOn', 'approvedBy', 'approvedByName', 'approvedOn', 'updatedBy', 'updatedAt', '_auditId'])
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Kết chuyển: Đã duyệt -> Đã kết chuyển (một lần duy nhất, gắn với đợt kết chuyển tạo cùng lúc)
+      allow update: if isManager()
+        && resource.data.auto == false
+        && resource.data.status == 'APPROVED'
+        && request.resource.data.status == 'POSTED'
+        && request.resource.data.no.size() > 0
+        && (resource.data.no == '' || request.resource.data.no == resource.data.no)
+        && existsAfter(batchPath(request.resource.data.postingBatchId))
+        && changed().hasOnly(['status', 'no', 'postingBatchId', 'postedOn', 'postedBy', 'entries', 'cashEntryIds', 'generatedIds', 'total', 'settledAmount', 'period', 'updatedBy', 'updatedAt', '_auditId'])
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Quyết toán tạm ứng: chỉ thay đổi số đã quyết toán của giấy tạm ứng đã kết chuyển
+      allow update: if isManager()
+        && resource.data.type == 'TU'
+        && resource.data.status == 'POSTED'
+        && request.resource.data.status == 'POSTED'
+        && changed().hasOnly(['settledAmount', 'updatedBy', 'updatedAt', '_auditId'])
+        && nonNeg(request.resource.data.settledAmount)
+        && request.resource.data.settledAmount <= resource.data.amount
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Hủy kết chuyển / đảo bút toán: chỉ Chủ doanh nghiệp
+      allow update: if isOwner()
+        && resource.data.status == 'POSTED'
+        && (
+          (resource.data.auto == false
+            && request.resource.data.status == 'APPROVED'
+            && (resource.data.type != 'TU' || resource.data.get('settledAmount', 0) == 0)
+            && changed().hasOnly(['status', 'postingBatchId', 'postedOn', 'postedBy', 'cashEntryIds', 'generatedIds', 'entries', 'reversedCount', 'lastReversal', 'updatedBy', 'updatedAt', '_auditId']))
+          || (resource.data.auto == true
+            && request.resource.data.status == 'CANCELLED'
+            && changed().hasOnly(['status', 'cancelledOn', 'cancelReason', 'updatedBy', 'updatedAt', '_auditId']))
+        )
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Xóa: chỉ chứng từ chưa được cấp số (chưa từng duyệt)
+      allow delete: if isStaffOrAbove()
+        && (resource.data.requestedBy == myEmail() || isManager())
+        && resource.data.auto == false
+        && resource.data.status in ['DRAFT', 'PENDING', 'REJECTED']
+        && resource.data.no == ''
+        && auditedDelete('internal_vouchers', id);
+    }
+
+    // Ảnh / file đính kèm chứng từ (nén, lưu trực tiếp trong Firestore)
+    match /voucher_files/{id} {
+      allow read: if isManager()
+        || (isStaffOrAbove() && (resource.data.createdBy == myEmail() || resource.data.requestedBy == myEmail()));
+      allow create: if isStaffOrAbove() && createdByMe()
+        && request.resource.data.voucherId is string
+        && request.resource.data.requestedBy is string
+        && shortText(request.resource.data.name, 200)
+        && request.resource.data.dataUrl is string
+        && request.resource.data.dataUrl.size() < 1000000;
+      allow update: if false;
+      allow delete: if isStaffOrAbove()
+        && (resource.data.createdBy == myEmail() || resource.data.requestedBy == myEmail() || isManager())
+        && (!exists(voucherPath(resource.data.voucherId))
+            || get(voucherPath(resource.data.voucherId)).data.status in ['DRAFT', 'PENDING', 'REJECTED']);
+    }
+
+    // Đợt kết chuyển: bất biến, chỉ Chủ DN ghi nhận chứng từ bị hủy kết chuyển
+    match /posting_batches/{id} {
+      allow read: if isManager();
+      allow create: if isManager() && createdByMe()
+        && request.resource.data.code is string
+        && request.resource.data.voucherIds is list
+        && audited('posting_batches/' + id, 'CREATE');
+      allow update: if isOwner()
+        && changed().hasOnly(['reversedIds', 'reversedCount', 'status', 'updatedBy', 'updatedAt', '_auditId'])
+        && audited('posting_batches/' + id, 'UPDATE');
+      allow delete: if false;
+    }
+
+    // Bộ đếm số chứng từ / số đợt: chỉ tăng, không giảm, không xóa
+    match /counters/{key} {
+      allow read: if isManager();
+      allow create: if isManager() && request.resource.data.value is int && request.resource.data.value >= 1;
+      allow update: if isManager() && request.resource.data.value is int && request.resource.data.value > resource.data.value;
+      allow delete: if false;
+    }
+
+    // =================================================================
     //  ĐIỀU PHỐI THÁNG — chỉ OWNER / CO_OWNER
     // =================================================================
     // Bản nháp làm việc (tự lưu liên tục, không cần nhật ký từng phím gõ)
@@ -314,8 +497,9 @@ service cloud.firestore {
       allow create: if isMember()
         && request.resource.data.actorEmail == myEmail()
         && request.resource.data.at == request.time
-        && request.resource.data.action in ['CREATE', 'UPDATE', 'DELETE']
-        && request.resource.data.docPath is string;
+        && request.resource.data.action in ['CREATE', 'UPDATE', 'DELETE', 'BATCH']
+        && request.resource.data.docPath is string
+        && (request.resource.data.action != 'BATCH' || request.resource.data.docPaths is list);
       allow update, delete: if false;
     }
     // Nhật ký cũ chuyển từ bản claude.ai: chỉ Chủ DN đọc / nhập, không sửa / xóa

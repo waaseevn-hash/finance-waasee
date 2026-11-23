@@ -291,7 +291,7 @@ export function approvalAmount(a, outstanding) {
 }
 
 /** Nhóm của một khoản chi trong bảng tổng hợp */
-export const PAY_GROUP = { AP: 'SUPPLIER', CUSTOM: 'FIXED', LOAN: 'BANK', INTEREST: 'BANK' };
+export const PAY_GROUP = { AP: 'SUPPLIER', CUSTOM: 'FIXED', LOAN: 'BANK', INTEREST: 'BANK', INTERNAL: 'INTERNAL' };
 
 export function planCandidates({ ap = [], loans = [], banks = [], month, extraAp = [], custom = [], approvals = [] }) {
   const { end } = monthRange(month);
@@ -449,6 +449,7 @@ export function allocateDraw(amount, creditBanks = []) {
  * Cân đối tháng:
  *   Tổng có       = tiền mặt có thể dùng (tồn két − dự phòng) + tiền gửi tài khoản
  *   Nguồn cơ sở   = Tổng có + phải thu chắc chắn về (các khoản đã chọn)
+ *   Nguồn khả dụng = Nguồn cơ sở (+ hạn mức vay còn trống nếu bật "tính gộp")
  *   Thiếu         = Tổng phải chi − Nguồn cơ sở  → phần thiếu lấy từ giải ngân hạn mức vay
  * Số dư lũy kế chạy theo thứ tự ưu tiên, âm ở khoản nào = từ khoản đó phải dùng tiền giải ngân.
  */
@@ -460,6 +461,7 @@ export function computePlan({
   arRows = [],
   creditAvailable = 0,
   creditBanks = [],
+  includeCredit = false,
   rows = [],
 }) {
   const cashUsable = num(cash) - num(reserve);
@@ -469,8 +471,8 @@ export function computePlan({
   const baseSources = haveTotal + arIn;
 
   const byPriority = { P1: 0, P2: 0, P3: 0 };
-  const groups = { SUPPLIER: 0, FIXED: 0, BANK: 0 };
-  const groupCount = { SUPPLIER: 0, FIXED: 0, BANK: 0 };
+  const groups = { SUPPLIER: 0, FIXED: 0, BANK: 0, INTERNAL: 0 };
+  const groupCount = { SUPPLIER: 0, FIXED: 0, BANK: 0, INTERNAL: 0 };
   let payTotal = 0;
   let running = baseSources;
   const outRows = rows.map((r) => {
@@ -491,6 +493,10 @@ export function computePlan({
   const suggestedDraw = Math.min(shortfall, num(creditAvailable));
   const uncovered = Math.max(0, shortfall - num(creditAvailable));
   const drawPlan = allocateDraw(suggestedDraw, creditBanks);
+  // "Nguồn tiền khả dụng" (thanh trên cùng): có thể gộp luôn hạn mức vay còn trống
+  const creditInSources = includeCredit ? num(creditAvailable) : 0;
+  const available = baseSources + creditInSources;
+  const balanceAvailable = available - payTotal;
 
   return {
     cashBalance: num(cash),
@@ -514,6 +520,10 @@ export function computePlan({
     uncovered,
     drawPlan,
     balanceAfterDraw: balance + suggestedDraw,
+    includeCredit: !!includeCredit,
+    creditInSources,
+    available,
+    balanceAvailable,
     p1Covered: baseSources + num(creditAvailable) >= byPriority.P1,
     p1CoveredBase: baseSources >= byPriority.P1,
     selectedCount: outRows.filter((r) => r.selected).length,

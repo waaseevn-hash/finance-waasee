@@ -22,6 +22,10 @@ const PERMS = {
   manageMembers: [ROLES.OWNER],
   viewAudit: [ROLES.OWNER],
   deleteSnapshots: [ROLES.OWNER],
+  viewVouchers: ALL, // Lập chứng từ thu chi nội bộ (STAFF chỉ thấy chứng từ của mình)
+  approveVouchers: MANAGERS, // Duyệt / từ chối chứng từ
+  postVouchers: MANAGERS, // Kết xuất in phiếu & kết chuyển sổ quỹ
+  reverseVouchers: [ROLES.OWNER], // Hủy kết chuyển / đảo bút toán
 };
 
 export function can(role, perm) {
@@ -34,6 +38,7 @@ export const ROUTES = [
   { key: 'cash', label: 'Tiền mặt trong két', short: 'Két', perm: 'viewTreasury' },
   { key: 'bank', label: 'Vay & Hạn mức NH', short: 'Ngân hàng', perm: 'viewTreasury' },
   { key: 'partners', label: 'Công nợ đối tác', short: 'Công nợ', perm: 'viewPartners' },
+  { key: 'vouchers', label: 'Chứng từ thu chi', short: 'Chứng từ', perm: 'viewVouchers' },
   { key: 'planner', label: 'Điều phối tháng', short: 'Điều phối', perm: 'viewTreasury' },
   { key: 'admin', label: 'Phân quyền & Nhật ký', short: 'Quản trị', perm: 'manageMembers' },
 ];

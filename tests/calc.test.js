@@ -171,7 +171,7 @@ test('điều phối tháng: ứng viên, gộp thứ tự, giả lập', () => 
   assert.equal(plan.suggestedDraw, 100);
   assert.equal(plan.uncovered, 0);
   assert.equal(plan.haveTotal, 250); // Tổng có = tiền mặt có thể dùng + tiền gửi
-  assert.deepEqual(plan.groups, { SUPPLIER: 250, FIXED: 200, BANK: 400 });
+  assert.deepEqual(plan.groups, { SUPPLIER: 250, FIXED: 200, BANK: 400, INTERNAL: 0 });
   assert.deepEqual(plan.drawPlan.map((d) => [d.name, d.amount]), [['VCB', 100]]); // giải ngân từ NH còn nhiều hạn mức nhất
   assert.equal(plan.balanceAfterDraw, 0);
   assert.equal(plan.rows.find((r) => r.key === 'c1').overflow, true);
@@ -235,4 +235,16 @@ test('đối chiếu kế hoạch vs thực tế', () => {
   const v2 = computeVariance({ ...snap, lockedOn: '2026-11-22' }, [...payments, { kind: 'AR', parentId: 'k', amount: 99, date: '2026-11-21' }]);
   assert.equal(v2.inRows[0].actual, 300);
   assert.equal(v2.totals.unplannedOut, 0);
+});
+
+test('nguồn khả dụng có / không gộp hạn mức vay', () => {
+  const rows = [{ key: 'a', kind: 'CUSTOM', selected: true, amount: 900, priority: 'P1' }];
+  const off = computePlan({ cashBalance: 500, reserve: 100, deposits: 200, arRows: [{ selected: true, amount: 100 }], creditAvailable: 1000, rows });
+  assert.equal(off.available, 700);
+  assert.equal(off.balanceAvailable, -200);
+  assert.equal(off.suggestedDraw, 200);
+  const on = computePlan({ cashBalance: 500, reserve: 100, deposits: 200, arRows: [{ selected: true, amount: 100 }], creditAvailable: 1000, includeCredit: true, rows });
+  assert.equal(on.available, 1700);
+  assert.equal(on.balanceAvailable, 800);
+  assert.equal(on.suggestedDraw, 200);
 });

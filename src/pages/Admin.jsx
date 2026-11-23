@@ -13,11 +13,21 @@ import { downloadXlsx } from '../lib/xlsx.js';
 import { useConfirm, useToast } from '../components/feedback.jsx';
 import { Who, useNames } from '../components/Who.jsx';
 import { resolveNames } from '../lib/runtime.js';
-import { saveCompanyName, useCompanyName } from '../lib/brand.js';
-import { Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Select, TableWrap, Tabs, cx, td, th } from '../components/ui.jsx';
+import { saveCompany, useCompany } from '../lib/brand.js';
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Select, TableWrap, Tabs, cx, td, th } from '../components/ui.jsx';
 
 /* ------------------------- Hiển thị giá trị nhật ký ------------------------- */
 const FIELD_LABEL = {
+  no: 'Số chứng từ',
+  person: 'Họ tên',
+  reason: 'Lý do / nội dung',
+  approvedBy: 'Người duyệt',
+  rejectReason: 'Lý do từ chối',
+  postingBatchId: 'Đợt kết chuyển',
+  postedOn: 'Ngày kết chuyển',
+  settledAmount: 'Đã quyết toán',
+  advanceAmount: 'Đã tạm ứng',
+  code: 'Mã đợt',
   date: 'Ngày',
   type: 'Loại',
   amount: 'Số tiền',
@@ -75,14 +85,30 @@ const FIELD_LABEL = {
   paymentId: 'Mã thanh toán',
   approvalId: 'Mã lệnh duyệt chi',
 };
-const MONEY_FIELDS = new Set(['amount', 'creditLimit', 'depositBalance', 'total', 'paid', 'openingPaid', 'payTotal', 'balance', 'sources', 'paidAmount', 'outstandingAtApproval']);
+const MONEY_FIELDS = new Set(['amount', 'creditLimit', 'depositBalance', 'total', 'paid', 'openingPaid', 'payTotal', 'balance', 'sources', 'paidAmount', 'outstandingAtApproval', 'settledAmount', 'advanceAmount', 'receiptsTotal', 'paymentsTotal', 'net']);
 
 function fmtValue(field, v) {
   if (v === null || v === undefined || v === '') return '—';
   if (MONEY_FIELDS.has(field) && typeof v === 'number') return fmtVND(v);
   if (typeof v === 'boolean') return v ? 'Có' : 'Không';
   if (field === 'type') return v === 'IN' ? 'Thu' : v === 'OUT' ? 'Chi' : v;
-  if (field === 'status') return { ACTIVE: 'Đang vay', SETTLED: 'Đã tất toán', OPEN: 'Chờ chuyển tiền', DONE: 'Đã chuyển tiền', CANCELLED: 'Đã hủy duyệt' }[v] || v;
+  if (field === 'status')
+    return (
+      {
+        ACTIVE: 'Đang vay',
+        SETTLED: 'Đã tất toán',
+        OPEN: 'Chờ chuyển tiền',
+        DONE: 'Đã chuyển tiền',
+        CANCELLED: 'Đã hủy',
+        DRAFT: 'Nháp',
+        PENDING: 'Chờ duyệt',
+        APPROVED: 'Đã duyệt · chờ kết xuất',
+        POSTED: 'Đã kết chuyển',
+        REJECTED: 'Từ chối',
+        REVERSED: 'Đã hủy kết chuyển',
+        PARTIAL: 'Hủy kết chuyển một phần',
+      }[v] || v
+    );
   if (field === 'mode') return { FULL: 'Chi hết / trả toàn bộ', PART: 'Chi 1 phần' }[v] || v;
   if (field === 'role') return ROLE_LABEL[v] || v;
   if (field === 'active') return v ? 'Đang hoạt động' : 'Đã khóa';
@@ -98,22 +124,36 @@ const ACTION = {
   CREATE: { label: 'Thêm', tone: 'green' },
   UPDATE: { label: 'Sửa', tone: 'blue' },
   DELETE: { label: 'Xóa', tone: 'red' },
+  BATCH: { label: 'Hàng loạt', tone: 'violet' },
 };
 
-/* ------------------------------ Tên doanh nghiệp ------------------------------ */
+/* ------------------------------ Thông tin doanh nghiệp (in trên chứng từ) ------------------------------ */
+const COMPANY_FIELDS = [
+  ['companyName', 'Tên doanh nghiệp (Đơn vị)', 'sm:col-span-2'],
+  ['address', 'Địa chỉ', 'sm:col-span-2'],
+  ['taxCode', 'Mã số thuế', ''],
+  ['bookNo', 'Quyển số mặc định (phiếu thu / chi)', ''],
+  ['director', 'Giám đốc (ký chứng từ)', ''],
+  ['chiefAccountant', 'Kế toán trưởng', ''],
+  ['cashier', 'Thủ quỹ', ''],
+  ['addressee', 'Kính gửi (trên giấy đề nghị)', ''],
+  ['regulation', 'Căn cứ ban hành mẫu', 'sm:col-span-2'],
+];
+
 function CompanyNameEditor() {
   const toast = useToast();
-  const current = useCompanyName();
+  const current = useCompany();
   const [v, setV] = useState(current);
   const [busy, setBusy] = useState(false);
   useEffect(() => setV(current), [current]);
+  const dirty = COMPANY_FIELDS.some(([k]) => (v[k] || '') !== (current[k] || ''));
   const save = async (e) => {
     e.preventDefault();
-    if (!v.trim() || v.trim() === current) return;
+    if (!String(v.companyName || '').trim()) return toast.error('Nhập tên doanh nghiệp');
     setBusy(true);
     try {
-      await saveCompanyName(v.trim());
-      toast.success('Đã lưu tên doanh nghiệp');
+      await saveCompany(v);
+      toast.success('Đã lưu thông tin doanh nghiệp');
     } catch (ex) {
       toast.error(friendlyError(ex));
     } finally {
@@ -121,12 +161,21 @@ function CompanyNameEditor() {
     }
   };
   return (
-    <form onSubmit={save} className="p-4 sm:p-5 space-y-2">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tên doanh nghiệp (hiện trên trang & báo cáo)</p>
-      <div className="flex gap-2">
-        <Input value={v} onChange={(e) => setV(e.target.value)} />
-        <Button type="submit" variant="primary" loading={busy}>
-          Lưu
+    <form onSubmit={save} className="p-4 sm:p-5 space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-ink-900">Thông tin doanh nghiệp</p>
+        <p className="text-xs text-slate-500">Hiện trên ứng dụng, báo cáo và in trên phiếu thu, phiếu chi, giấy đề nghị (mẫu Thông tư 200).</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {COMPANY_FIELDS.map(([k, label, cls]) => (
+          <Field key={k} label={label} className={cls}>
+            <Input value={v[k] || ''} onChange={(e) => setV((x) => ({ ...x, [k]: e.target.value }))} />
+          </Field>
+        ))}
+      </div>
+      <div className="flex justify-end">
+        <Button type="submit" variant="primary" loading={busy} disabled={!dirty}>
+          Lưu thông tin
         </Button>
       </div>
     </form>
@@ -464,6 +513,26 @@ function AuditLog() {
   };
 
   const Details = ({ l }) => {
+    if (l.action === 'BATCH') {
+      return (
+        <div className="space-y-1">
+          <p className="text-slate-500">Giao dịch gồm {(l.docPaths || []).length} thao tác ghi (thực hiện nguyên tử — cùng thành công hoặc cùng hủy):</p>
+          <ul className="space-y-0.5 max-h-60 overflow-y-auto thin-scroll">
+            {(l.ops || []).map((o, i) => (
+              <li key={i}>
+                <Badge tone={o.op === 'CREATE' ? 'green' : 'blue'}>{o.op === 'CREATE' ? 'Thêm' : 'Sửa'}</Badge>{' '}
+                <span className="text-slate-500">{COLLECTION_LABEL[o.path.split('/')[0]] || o.path.split('/')[0]}</span>{' '}
+                <span className="money text-slate-800">
+                  {o.op === 'CREATE'
+                    ? o.after?.no || o.after?.code || o.after?.description || ''
+                    : (o.changes || []).map((c) => `${FIELD_LABEL[c.field] || c.field}: ${fmtValue(c.field, c.from)} → ${fmtValue(c.field, c.to)}`).join(' · ')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
     if (l.action === 'UPDATE') {
       return (
         <ul className="space-y-0.5">
@@ -524,6 +593,7 @@ function AuditLog() {
             <option value="CREATE">Thêm</option>
             <option value="UPDATE">Sửa</option>
             <option value="DELETE">Xóa</option>
+            <option value="BATCH">Hàng loạt</option>
           </Select>
           <Select value={coll} onChange={(e) => setColl(e.target.value)} className="w-auto">
             <option value="ALL">Mọi đối tượng</option>

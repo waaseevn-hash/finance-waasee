@@ -75,6 +75,10 @@ import { useApprovalFlow } from '../components/forms/approvalForms.jsx';
 import { Who, useNames } from '../components/Who.jsx';
 import { resolveNames } from '../lib/runtime.js';
 import { exportReport } from '../lib/exportReport.js';
+import { internalForPlan } from '../lib/vouchers.js';
+import { downloadPlanXlsx } from '../lib/planExcel.js';
+import { getCompanyName } from '../lib/brand.js';
+import { CashInStrip, PlanActionsMobile, PlanTopBar, PriorityTable, RowDrawer, matchFilter } from '../components/planner/PlanParts.jsx';
 
 const arrayMove = (a, from, to) => {
   const r = a.slice();
@@ -153,6 +157,7 @@ function newDraft(month, templates = []) {
     month,
     reserve: 0,
     includeDeposits: true,
+    includeCredit: false,
     ar: {},
     extraAr: [],
     items: {},
@@ -180,175 +185,7 @@ function normalizeDraft(d, month) {
 }
 
 function serialize(d) {
-  return pick(d, ['month', 'reserve', 'includeDeposits', 'ar', 'extraAr', 'items', 'extraAp', 'custom', 'order']);
-}
-
-const KIND_TAG = {
-  AP: { label: 'Công nợ', tone: 'orange' },
-  LOAN: { label: 'Đáo hạn NH', tone: 'blue' },
-  INTEREST: { label: 'Lãi vay', tone: 'blue' },
-  CUSTOM: { label: 'Chi cố định', tone: 'violet' },
-};
-
-const PRIO_ACTIVE = { P1: 'bg-rose-600 text-white shadow-sm', P2: 'bg-orange-500 text-white shadow-sm', P3: 'bg-slate-500 text-white shadow-sm' };
-
-/** Đổi nhãn ưu tiên bằng 1 chạm */
-function PriorityPicker({ value, onChange }) {
-  return (
-    <div className="inline-flex h-9 w-fit gap-0.5 rounded-lg bg-slate-100 p-0.5" role="radiogroup" aria-label="Mức ưu tiên">
-      {['P1', 'P2', 'P3'].map((p) => (
-        <button
-          key={p}
-          type="button"
-          role="radio"
-          aria-checked={value === p}
-          title={PRIORITY[p].label + ' — ' + PRIORITY[p].hint}
-          onClick={() => onChange(p)}
-          className={cx('w-[30px] rounded-md text-xs font-bold transition-colors', value === p ? PRIO_ACTIVE[p] : 'text-slate-400 hover:bg-white hover:text-slate-700')}
-        >
-          {p}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/* =========================== Dòng phải trả (kéo-thả) =========================== */
-function PayRow({ row, index, onToggle, onAmount, onMode, onPriority, onRemove, onApprove, itemRef, style, isDragging, handleProps, supplier }) {
-  const days = row.dueDate ? daysBetween(todayISO(), row.dueDate) : null;
-  const over = row.amount > row.outstanding;
-  const removable = row.kind === 'CUSTOM' || row.extra;
-  const isDebt = row.kind === 'AP' || row.kind === 'LOAN';
-
-  return (
-    <li
-      ref={itemRef}
-      style={style}
-      className={cx(
-        'bg-white px-2 sm:px-3 py-2.5 border-b border-slate-100 last:border-0',
-        isDragging && 'shadow-xl ring-1 ring-orchid-200 rounded-xl',
-        !row.selected && 'bg-slate-50/70',
-        row.overflow && 'bg-rose-50/80',
-      )}
-    >
-      <div className="flex items-start gap-2">
-        <button
-          type="button"
-          {...handleProps}
-          style={{ touchAction: 'none' }}
-          className="mt-1 grid h-8 w-6 shrink-0 cursor-grab place-items-center rounded text-slate-300 hover:text-slate-600 active:cursor-grabbing"
-          title="Kéo để đổi thứ tự ưu tiên (hoặc chọn rồi bấm phím ↑ ↓)"
-          aria-label="Kéo để đổi thứ tự"
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-        <div className="mt-2">
-          <Checkbox
-            checked={row.selected}
-            onChange={(v) => onToggle(row.key, v)}
-            disabled={row.locked}
-            title={row.locked ? 'Đã duyệt chi — muốn bỏ thì hủy duyệt chi' : 'Chọn chi tháng này'}
-          />
-        </div>
-        <div className="min-w-0 flex-1 grid grid-cols-[100px_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_100px_210px_150px] gap-x-3 gap-y-2 items-center">
-          <div className="min-w-0 col-span-2 lg:col-span-1">
-            <p className={cx('text-sm font-medium truncate', row.selected ? 'text-ink-900' : 'text-slate-400 line-through decoration-slate-300')}>
-              <span className="mr-1.5 text-xs font-semibold text-slate-400 tabular-nums">#{index + 1}</span>
-              {row.label}
-            </p>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-              {row.kind !== 'CUSTOM' && <span className="truncate max-w-[200px]">{row.partner}</span>}
-              <Badge tone={KIND_TAG[row.kind].tone}>{row.kind === 'CUSTOM' ? row.category : KIND_TAG[row.kind].label}</Badge>
-              {row.dueDate && <Badge tone={days < 0 ? 'red' : days <= 7 ? 'amber' : 'slate'}>{`${fmtDate(row.dueDate)} · ${describeDays(days)}`}</Badge>}
-              <span>
-                {isDebt ? 'Còn nợ' : 'Dự kiến'} <Money value={row.outstanding} className="font-medium text-slate-600" />
-              </span>
-            </div>
-            {row.kind === 'AP' && <SupplierInfo supplier={supplier || { name: row.partner }} compact className="mt-0.5" />}
-            {row.kind === 'AP' && onApprove && (
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                {row.approval ? (
-                  <>
-                    <Badge tone="green" icon={BadgeCheck}>
-                      Đã duyệt {row.approval.mode === 'FULL' ? 'chi hết' : 'chi 1 phần'}
-                      {row.approval.approvedOn ? ` · ${fmtDate(row.approval.approvedOn)}` : ''}
-                    </Badge>
-                    <button type="button" onClick={() => onApprove(row)} className="text-[11px] font-semibold text-slate-500 hover:text-ink-900 hover:underline">
-                      Sửa duyệt
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onApprove(row)}
-                    className="inline-flex items-center gap-1 rounded-md bg-vermilion-50 px-2 py-0.5 text-[11px] font-semibold text-vermilion-700 hover:bg-vermilion-100"
-                  >
-                    <Stamp className="h-3 w-3" /> Duyệt chi
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-          <PriorityPicker value={row.priority} onChange={(p) => onPriority(row.key, p)} />
-          <div className="space-y-1.5">
-            {isDebt && (
-              <div className="grid grid-cols-2 gap-0.5 rounded-lg bg-slate-100 p-0.5" role="radiogroup" aria-label="Hình thức trả">
-                {[
-                  ['FULL', 'Trả toàn bộ'],
-                  ['PART', 'Trả 1 phần'],
-                ].map(([m, label]) => (
-                  <button
-                    key={m}
-                    type="button"
-                    role="radio"
-                    aria-checked={row.mode === m}
-                    disabled={!row.selected || row.locked}
-                    onClick={() => onMode(row.key, m, row)}
-                    className={cx(
-                      'h-7 rounded-md text-[11.5px] font-semibold transition-colors disabled:opacity-50',
-                      row.mode === m ? (m === 'FULL' ? 'bg-orchid-600 text-white shadow-sm' : 'bg-amber-500 text-white shadow-sm') : 'text-slate-500 hover:bg-white',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            <MoneyInput
-              value={row.amount}
-              onChange={(v) => onAmount(row.key, v, row.outstanding)}
-              showHint={false}
-              className="!h-9"
-              disabled={!row.selected || row.locked || (isDebt && row.mode === 'FULL')}
-            />
-            {isDebt && row.mode === 'PART' && row.selected && (
-              <p className="text-[11px] text-right text-slate-500">
-                Còn nợ lại <Money value={row.remainingAfter} className="font-semibold text-amber-700" />
-              </p>
-            )}
-            {over && <p className="text-[11px] text-amber-700 text-right">Lớn hơn số còn nợ</p>}
-          </div>
-          <div className="col-span-2 lg:col-span-1 flex items-center justify-between lg:justify-end gap-2">
-            <span className="lg:hidden text-xs text-slate-400">Số dư sau khoản này</span>
-            <span className="text-right">
-              {row.selected ? (
-                <Money value={row.runningAfter} className={cx('text-sm font-semibold', row.runningAfter < 0 ? 'text-rose-600' : 'text-jade-700')} />
-              ) : (
-                <span className="text-xs text-slate-400">Tạm hoãn</span>
-              )}
-            </span>
-            {removable ? (
-              <button type="button" onClick={() => onRemove(row)} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600" title="Bỏ khỏi bảng">
-                <X className="h-4 w-4" />
-              </button>
-            ) : (
-              <span className="hidden lg:block h-7 w-7 shrink-0" />
-            )}
-          </div>
-        </div>
-      </div>
-    </li>
-  );
+  return pick(d, ['month', 'reserve', 'includeDeposits', 'includeCredit', 'ar', 'extraAr', 'items', 'extraAp', 'custom', 'order']);
 }
 
 /* =========================== Modal: thêm khoản chi cố định =========================== */
@@ -646,6 +483,7 @@ const SUM_GROUPS = [
   { key: 'SUPPLIER', title: 'A. Trả nhà cung cấp', bar: 'bg-vermilion-500', text: 'text-vermilion-700' },
   { key: 'FIXED', title: 'B. Chi cố định (lương, thuế, vận hành…)', bar: 'bg-orchid-500', text: 'text-orchid-700' },
   { key: 'BANK', title: 'C. Trả ngân hàng (lãi vay, đáo hạn)', bar: 'bg-sapphire-500', text: 'text-sapphire-700' },
+  { key: 'INTERNAL', title: 'D. Chi nội bộ (chứng từ đã duyệt, chờ kết xuất)', bar: 'bg-amber-500', text: 'text-amber-700' },
 ];
 
 function FundLine({ label, hint, value, strong, tone = 'text-ink-900', sign }) {
@@ -664,6 +502,7 @@ function FundLine({ label, hint, value, strong, tone = 'text-ink-900', sign }) {
 }
 
 function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
+  const [open, setOpen] = useState(false);
   const selected = plan.rows.filter((r) => r.selected);
   const deferred = plan.rows.filter((r) => !r.selected);
   const deferredTotal = deferred.reduce((t, r) => t + (Number(r.amount) || 0), 0);
@@ -673,12 +512,20 @@ function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
 
   return (
     <Card className="mt-4">
-      <CardHeader
-        title="3 · Bảng tổng hợp chi trả tháng"
-        subtitle="Toàn bộ khoản phải trả đã chọn — so với tiền đang có, thiếu thì giải ngân"
-        icon={Scale}
-        iconClass="bg-ink-900 text-white"
-      />
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full text-left" aria-expanded={open}>
+        <CardHeader
+          title="Bảng tổng hợp chi trả & giải ngân"
+          subtitle={
+            open
+              ? 'Danh sách đi lệnh theo nhóm — so với tiền đang có, thiếu thì giải ngân'
+              : `${selected.length} khoản · ${fmtVND(plan.payTotal)}${negative ? ` · cần giải ngân ${fmtVND(plan.suggestedDraw)}` : ' · đủ tiền'}${unapproved ? ` · ${unapproved} khoản NCC chưa duyệt chi` : ''}`
+          }
+          icon={Scale}
+          iconClass="bg-ink-900 text-white"
+          actions={<span className="text-xs font-semibold text-slate-500">{open ? 'Thu gọn' : 'Mở'}</span>}
+        />
+      </button>
+      {open && (
       <div className="grid gap-4 px-4 sm:px-5 pb-5 xl:grid-cols-[minmax(0,1fr)_340px] items-start">
         <div className="min-w-0 rounded-xl border border-slate-200 overflow-hidden">
           {selected.length === 0 ? (
@@ -736,7 +583,7 @@ function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
                                   <span className="text-xs italic text-amber-700">Chưa có số tài khoản</span>
                                 )
                               ) : (
-                                <span className="text-xs text-slate-500">{r.kind === 'CUSTOM' ? 'Chi nội bộ' : r.partner}</span>
+                                <span className="text-xs text-slate-500">{r.kind === 'CUSTOM' ? 'Chi nội bộ' : r.kind === 'INTERNAL' ? 'Thủ quỹ chi theo phiếu' : r.partner}</span>
                               )}
                             </td>
                             <td className={cx(td, 'hidden md:table-cell')}>
@@ -876,6 +723,7 @@ function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
           )}
         </div>
       </div>
+      )}
     </Card>
   );
 }
@@ -1031,15 +879,36 @@ export default function Planner() {
     () => (draft ? planReceivables({ ar: data.ar, month, extraAr: draft.extraAr, state: draft.ar }) : []),
     [data.ar, month, draft],
   );
-  const candidates = useMemo(
+  // Chứng từ nội bộ đã duyệt (chưa kết chuyển) gộp thành MỘT dòng P1; phần đã kết chuyển đã trừ vào tồn két
+  const internal = useMemo(() => internalForPlan(data.vouchers || [], month), [data.vouchers, month]);
+  const candidates = useMemo(() => {
+    if (!draft) return [];
+    const list = planCandidates({ ap: data.ap, loans: data.loans, banks: data.banks, month, extraAp: draft.extraAp, custom: draft.custom, approvals: data.approvals });
+    if (internal.pending.length || internal.posted.length) {
+      list.push({
+        key: 'internal',
+        kind: 'INTERNAL',
+        refId: null,
+        label: 'Chi tiêu nội bộ đã duyệt',
+        partner: `${internal.pending.length} chứng từ chờ kết xuất${internal.posted.length ? ` · đã kết chuyển ${fmtVND(internal.postedOut)}` : ''}`,
+        dueDate: null,
+        outstanding: internal.pendingOut,
+        defaultPriority: 'P1',
+        category: 'Chi nội bộ',
+      });
+    }
+    return list;
+  }, [data.ap, data.loans, data.banks, data.approvals, month, draft, internal]);
+  const rows = useMemo(
     () =>
       draft
-        ? planCandidates({ ap: data.ap, loans: data.loans, banks: data.banks, month, extraAp: draft.extraAp, custom: draft.custom, approvals: data.approvals })
+        ? mergePlanRows(candidates, draft).map((r) =>
+            r.kind === 'INTERNAL' ? { ...r, priority: 'P1', mode: 'FULL', amount: r.outstanding, remainingAfter: 0, edited: false } : r,
+          )
         : [],
-    [data.ap, data.loans, data.banks, data.approvals, month, draft],
+    [candidates, draft],
   );
-  const rows = useMemo(() => (draft ? mergePlanRows(candidates, draft) : []), [candidates, draft]);
-  const plan = useMemo(
+  const planRaw = useMemo(
     () =>
       computePlan({
         cashBalance: cashBal,
@@ -1049,10 +918,23 @@ export default function Planner() {
         arRows,
         creditAvailable: bank.totals.available,
         creditBanks: bank.rows,
+        includeCredit: !!draft?.includeCredit,
         rows,
       }),
     [cashBal, draft, bank, arRows, rows],
   );
+  // Đánh dấu khoản đầu tiên làm số dư lũy kế âm (từ đó phải dùng tiền vay)
+  const plan = useMemo(() => {
+    let crossed = false;
+    return {
+      ...planRaw,
+      rows: planRaw.rows.map((r) => {
+        const crossing = !crossed && r.selected && r.overflow;
+        if (crossing) crossed = true;
+        return crossing ? { ...r, crossing: true } : r;
+      }),
+    };
+  }, [planRaw]);
 
   const monthEnd = monthRange(month).end;
   const extraApChoices = useMemo(
@@ -1086,9 +968,11 @@ export default function Planner() {
     setItem(key, { sel });
   };
   // Sửa số tiền = trả 1 phần; chọn "Trả toàn bộ" = luôn bằng số còn nợ
-  const onAmount = (key, v) => setItem(key, { amount: v, mode: 'PART' });
-  const onMode = (key, mode, row) =>
-    setItem(key, mode === 'FULL' ? { mode, amount: null } : { mode, amount: row.mode === 'PART' ? row.amount : Math.round(row.outstanding / 2 / 1000) * 1000 });
+  const onAmount = (key, v) => {
+    const r = rows.find((x) => x.key === key);
+    if (r && r.kind !== 'CUSTOM' && v === r.outstanding) setItem(key, { mode: 'FULL', amount: null });
+    else setItem(key, { amount: v, mode: 'PART' });
+  };
   const onPriority = (key, priority) => setItem(key, { priority });
   const onRemove = (row) =>
     edit((d) => {
@@ -1104,8 +988,34 @@ export default function Planner() {
     });
   const setAr = (id, patch) => edit((d) => ({ ...d, ar: { ...d.ar, [id]: { ...(d.ar[id] || {}), ...patch } } }));
 
+  /* ---------- bảng ưu tiên nhóm P1 / P2 / P3 ---------- */
+  const [filter, setFilter] = useState('ALL');
+  const [drawerKey, setDrawerKey] = useState(null);
   const rowKeys = rows.map((r) => r.key);
-  const sortable = useSortableList(rowKeys, (from, to) => edit((d) => ({ ...d, order: arrayMove(rowKeys, from, to) })));
+  const groups = useMemo(() => {
+    const g = { P1: [], P2: [], P3: [] };
+    for (const r of plan.rows) if (matchFilter(r, filter)) g[r.priority]?.push(r);
+    return g;
+  }, [plan.rows, filter]);
+  // Kéo-thả trong một nhóm: đổi chỗ các khoản của nhóm, giữ nguyên vị trí các khoản khác trong thứ tự chung
+  const reorderGroup = (groupKeys) => (from, to) =>
+    edit((d) => {
+      const moved = arrayMove(groupKeys, from, to);
+      const inGroup = new Set(groupKeys);
+      let i = 0;
+      return { ...d, order: rowKeys.map((k) => (inGroup.has(k) ? moved[i++] : k)) };
+    });
+  const keysP1 = groups.P1.map((r) => r.key);
+  const keysP2 = groups.P2.map((r) => r.key);
+  const keysP3 = groups.P3.map((r) => r.key);
+  const sortables = {
+    P1: useSortableList(keysP1, reorderGroup(keysP1)),
+    P2: useSortableList(keysP2, reorderGroup(keysP2)),
+    P3: useSortableList(keysP3, reorderGroup(keysP3)),
+  };
+  const onQuick = (row, pct) => (pct >= 100 ? setItem(row.key, { mode: 'FULL', amount: null }) : setItem(row.key, { mode: 'PART', amount: Math.round((row.outstanding * pct) / 100 / 1000) * 1000 }));
+  const onNote = (key, note) => setItem(key, { note });
+  const drawerRow = drawerKey ? plan.rows.find((r) => r.key === drawerKey) || null : null;
   const sortByPriority = () => edit((d) => ({ ...d, order: [...rows].sort(byPriorityThenDue).map((r) => r.key) }));
 
   const saveTemplates = async (list) => {
@@ -1148,6 +1058,9 @@ export default function Planner() {
       'creditUsed',
       'baseSources',
       'sources',
+      'includeCredit',
+      'creditInSources',
+      'available',
     ]),
     arRows: arRows.map((r) => pick(r, ['key', 'refId', 'partner', 'label', 'dueDate', 'certainty', 'outstanding', 'selected', 'amount'])),
     rows: plan.rows.map((r) => {
@@ -1163,7 +1076,7 @@ export default function Planner() {
       };
     }),
     totals: {
-      ...pick(plan, ['payTotal', 'byPriority', 'groups', 'groupCount', 'balance', 'shortfall', 'needCredit', 'suggestedDraw', 'uncovered', 'balanceAfterDraw']),
+      ...pick(plan, ['payTotal', 'byPriority', 'groups', 'groupCount', 'balance', 'balanceAvailable', 'shortfall', 'needCredit', 'suggestedDraw', 'uncovered', 'balanceAfterDraw']),
       drawPlan: plan.drawPlan.map((d) => pick(d, ['name', 'available', 'amount'])),
     },
   });
@@ -1267,8 +1180,16 @@ export default function Planner() {
     );
   };
 
-  const selAr = arRows.filter((r) => r.selected);
   const negative = plan.balance < 0;
+  const exportPdf = () => startExport({ ...buildSnapshot(), version: null, createdBy: actor.email }, null);
+  const exportExcel = async () => {
+    try {
+      await downloadPlanXlsx({ plan, arRows, month, companyName: getCompanyName() });
+      toast.success('Đã xuất file Excel bảng điều phối');
+    } catch (ex) {
+      toast.error(friendlyError(ex));
+    }
+  };
 
   return (
     <div>
@@ -1276,17 +1197,12 @@ export default function Planner() {
         icon={CalendarRange}
         tone="orchid"
         title="Bảng điều phối tài chính tháng"
-        subtitle="Cân đối tiền về – quyết định trả ai trước, trả bao nhiêu"
+        subtitle="10 giây: có bao nhiêu · chi bao nhiêu · còn bao nhiêu"
         actions={
           <>
             <MonthPicker value={month} onChange={setMonth} />
             <SaveBadge />
-            <Button icon={Printer} loading={!!reportDoc} onClick={() => startExport({ ...buildSnapshot(), version: null, createdBy: actor.email }, null)}>
-              Xuất PDF
-            </Button>
-            <Button variant="orchid" icon={Lock} onClick={() => setModal('lock')}>
-              Chốt kế hoạch tháng
-            </Button>
+            <PlanActionsMobile exporting={!!reportDoc} onLock={() => setModal('lock')} onPdf={exportPdf} onExcel={exportExcel} />
           </>
         }
       />
@@ -1323,207 +1239,42 @@ export default function Planner() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-        {/* ===================== KHU VỰC 1: NGUỒN TIỀN ===================== */}
-        <Card className="xl:col-span-4 2xl:col-span-4">
-          <CardHeader title="1 · Nguồn tiền sẵn có & tiền về" subtitle="Cash In" icon={CircleArrowDown} iconClass="bg-emerald-50 text-jade-600" />
-          <div className="px-4 sm:px-5 pb-5 space-y-4">
-            <div className="rounded-xl border border-slate-200 p-3 space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <button type="button" onClick={() => quick.open('cash')} className="flex items-center gap-2 text-slate-600 hover:text-jade-700">
-                  <Vault className="h-4 w-4" /> Tồn quỹ két hiện tại
-                  <span className="rounded-full bg-jade-50 px-2 py-0.5 text-[11px] font-semibold text-jade-700">Thêm / bớt</span>
-                </button>
-                <Money value={cashBal} className="font-semibold text-ink-900" />
-              </div>
-              <Field label="Giữ lại tối thiểu trong két (quỹ dự phòng)">
-                <MoneyInput value={draft.reserve} onChange={(v) => edit((d) => ({ ...d, reserve: v }))} />
-              </Field>
-              <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2">
-                <span className="text-slate-600">Tiền mặt có thể dùng</span>
-                <Money value={plan.cashUsable} className={cx('font-semibold', plan.cashUsable < 0 ? 'text-rose-600' : 'text-jade-700')} />
-              </div>
-            </div>
+      {/* ===================== TẦNG 1: THANH TỔNG HỢP ===================== */}
+      <PlanTopBar
+        plan={plan}
+        exporting={!!reportDoc}
+        onLock={() => setModal('lock')}
+        onPdf={exportPdf}
+        onExcel={exportExcel}
+      />
 
-            <div className="rounded-xl border border-slate-200 p-3">
-              <Toggle
-                tone="green"
-                checked={draft.includeDeposits}
-                onChange={(v) => edit((d) => ({ ...d, includeDeposits: v }))}
-                label="Tính tiền gửi tài khoản ngân hàng"
-                description={
-                  <>
-                    Số dư hiện có: <Money value={bank.totals.deposit} className="font-medium" />
-                  </>
-                }
-              />
-              <button type="button" onClick={() => quick.open('deposits')} className="mt-2 text-xs font-semibold text-lagoon-700 hover:underline">
-                Cập nhật số dư tiền gửi
-              </button>
-            </div>
+      {/* ===================== TẦNG 2: NGUỒN TIỀN VÀO ===================== */}
+      <CashInStrip
+        plan={plan}
+        cashBal={cashBal}
+        deposits={bank.totals.deposit}
+        credit={bank.totals.available}
+        draft={draft}
+        arRows={arRows}
+        edit={edit}
+        setAr={setAr}
+        quick={quick}
+        onExtraAr={() => setModal('extraAr')}
+      />
 
-            <div>
-              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-2">
-                <p className="text-sm font-semibold text-slate-800">
-                  Phải thu dự kiến về{' '}
-                  <span className="font-normal text-slate-500">
-                    ({selAr.length}/{arRows.length} khoản)
-                  </span>
-                </p>
-                <span className="flex gap-1">
-                  <Button size="xs" variant="ghost" icon={Plus} onClick={() => quick.open('ar')}>
-                    Thu tiền / thêm
-                  </Button>
-                  <Button size="xs" variant="ghost" icon={ListPlus} onClick={() => setModal('extraAr')}>
-                    Đưa khoản khác vào
-                  </Button>
-                </span>
-              </div>
-              {arRows.length === 0 ? (
-                <p className="rounded-xl bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">Không có khoản phải thu nào đến hạn trong tháng.</p>
-              ) : (
-                <ul className="rounded-xl border border-slate-200 divide-y divide-slate-100 max-h-[420px] overflow-y-auto thin-scroll">
-                  {arRows.map((r) => (
-                    <li key={r.key} className={cx('px-3 py-2.5', !r.selected && 'bg-slate-50/70')}>
-                      <div className="flex items-start gap-2.5">
-                        <div className="mt-0.5">
-                          <Checkbox checked={r.selected} onChange={(v) => setAr(r.key, { sel: v })} title="Đưa vào tính toán" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className={cx('text-sm font-medium truncate', r.selected ? 'text-slate-800' : 'text-slate-400')}>{r.partner}</p>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                            <Badge tone={CERTAINTY[r.certainty]?.tone}>{CERTAINTY[r.certainty]?.label}</Badge>
-                            {r.dueDate && <span className="text-[11px] text-slate-500">{fmtDate(r.dueDate)}</span>}
-                            {r.extra && (
-                              <button
-                                type="button"
-                                className="text-[11px] text-rose-600 hover:underline"
-                                onClick={() => edit((d) => ({ ...d, extraAr: d.extraAr.filter((id) => id !== r.refId) }))}
-                              >
-                                Bỏ
-                              </button>
-                            )}
-                          </div>
-                          <div className="mt-2">
-                            <MoneyInput
-                              value={r.amount}
-                              onChange={(v) => setAr(r.key, { amount: v === r.outstanding ? null : v })}
-                              showHint={false}
-                              className="!h-9"
-                              disabled={!r.selected}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-2 flex justify-between text-sm px-1">
-                <span className="text-slate-600">Tổng phải thu đưa vào tính</span>
-                <Money value={plan.arIn} className="font-semibold text-jade-700" />
-              </div>
-            </div>
-
-            <div className="relative rounded-2xl bg-gradient-to-br from-jade-500 to-jade-700 guilloche text-white px-4 py-3 shadow-lg">
-              <div className="relative flex items-center justify-between">
-                <span className="text-sm text-white/85">(1) Tổng có</span>
-                <Money value={plan.haveTotal} className="text-lg font-semibold" />
-              </div>
-              <p className="relative text-[11px] text-white/75">Tiền mặt có thể dùng + tiền gửi tài khoản</p>
-              {plan.arIn > 0 && (
-                <div className="relative mt-1.5 flex items-center justify-between border-t border-white/20 pt-1.5 text-xs text-white/85">
-                  <span>+ Phải thu chắc chắn về</span>
-                  <Money value={plan.arIn} className="font-semibold" />
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-xl border border-sapphire-100 bg-sapphire-50/60 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-ink-900">Hạn mức vay còn được giải ngân</p>
-                  <p className="text-xs text-slate-500">Không cộng sẵn vào tiền có — chỉ giải ngân phần còn thiếu (xem bảng tổng hợp)</p>
-                </div>
-                <Money value={bank.totals.available} className="shrink-0 text-sm font-semibold text-sapphire-700" />
-              </div>
-              <button type="button" onClick={() => quick.open('credit')} className="mt-2 text-xs font-semibold text-sapphire-700 hover:underline">
-                Xem / thêm khoản vay
-              </button>
-            </div>
-          </div>
-        </Card>
-
-        {/* ===================== KHU VỰC 2: ƯU TIÊN PHẢI TRẢ ===================== */}
-        <Card className="xl:col-span-8 2xl:col-span-8">
-          <CardHeader
-            title="2 · Bảng lập thứ tự ưu tiên phải trả"
-            subtitle="Kéo ⋮⋮ để đổi thứ tự · Tick chọn chi tháng này · Sửa số tiền để trả một phần"
-            icon={ArrowDownWideNarrow}
-            iconClass="bg-orchid-50 text-orchid-600"
-          />
-          <div className="flex flex-wrap items-center gap-2 px-4 sm:px-5 pb-3">
-            <Button size="sm" variant="orchid" icon={Plus} onClick={() => setModal('fixed')}>
-              Khoản chi cố định
-            </Button>
-            <Button size="sm" variant="vermilion" icon={Plus} onClick={() => quick.open('ap', { filter: 'month' })}>
-              Công nợ phải trả
-            </Button>
-            <Button size="sm" icon={ListPlus} onClick={() => setModal('extraAp')}>
-              Thêm công nợ chưa đến hạn
-            </Button>
-            <Button size="sm" icon={ArrowDownWideNarrow} onClick={sortByPriority}>
-              Sắp xếp theo ưu tiên
-            </Button>
-            <Button size="sm" variant="ghost" icon={RotateCcw} onClick={resetDraft}>
-              Làm lại
-            </Button>
-            <div className="ml-auto flex flex-wrap gap-1.5">
-              {['P1', 'P2', 'P3'].map((p) => (
-                <Badge key={p} tone={PRIORITY[p].tone}>
-                  {p}: <Money value={plan.byPriority[p]} compact />
-                </Badge>
-              ))}
-            </div>
-          </div>
-
-          <div className="hidden lg:grid grid-cols-[minmax(0,1fr)_100px_210px_150px] gap-x-3 pl-[78px] pr-[50px] pr-3 py-2 border-y border-slate-100 bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            <span>Khoản chi</span>
-            <span>Ưu tiên</span>
-            <span className="text-right">Trả toàn bộ / 1 phần</span>
-            <span className="text-right" title="Số âm: từ khoản này trở đi phải dùng tiền giải ngân">Số dư lũy kế (âm = giải ngân)</span>
-          </div>
-
-          {rows.length === 0 ? (
-            <EmptyState
-              icon={BadgeCheck}
-              title="Chưa có khoản phải trả nào trong tháng"
-              description="Thêm nhanh Lương, Thuế/BHXH, Chi phí vận hành… bằng nút “Khoản chi cố định”."
-            />
-          ) : (
-            <ul className="border-t border-slate-100 lg:border-t-0">
-              {plan.rows.map((r, i) => (
-                <PayRow
-                  key={r.key}
-                  row={r}
-                  index={i}
-                  onToggle={onToggle}
-                  onAmount={onAmount}
-                  onMode={onMode}
-                  onPriority={onPriority}
-                  supplier={r.kind === 'AP' ? findSupplier(data.suppliers, { supplierId: r.supplierId, partnerName: r.partner }) : null}
-                  onRemove={onRemove}
-                  onApprove={onApprove}
-                  itemRef={sortable.setRef(r.key)}
-                  style={sortable.styleFor(r.key, i)}
-                  isDragging={sortable.draggingKey === r.key}
-                  handleProps={sortable.handleProps(r.key)}
-                />
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+      {/* ===================== TẦNG 3: BẢNG ƯU TIÊN ===================== */}
+      <PriorityTable
+        plan={plan}
+        groups={groups}
+        filter={filter}
+        setFilter={setFilter}
+        sortables={sortables}
+        handlers={{ onToggle, onAmount, onQuick, onPriority, onOpen: (r) => setDrawerKey(r.key) }}
+        onAddFixed={() => setModal('fixed')}
+        onExtraAp={() => setModal('extraAp')}
+        onSort={sortByPriority}
+        onReset={resetDraft}
+      />
 
       {/* ===================== KHU VỰC 3: BẢNG TỔNG HỢP ===================== */}
       <SummaryCard plan={plan} data={data} onApprove={onApprove} paidThisMonth={paidThisMonth} onDeposits={() => quick.open('deposits')} />
@@ -1641,6 +1392,19 @@ export default function Planner() {
         </div>
       </Modal>
       {flow.modals}
+      {drawerRow && (
+        <RowDrawer
+          row={drawerRow}
+          data={data}
+          note={draft.items?.[drawerRow.key]?.note || ''}
+          onNote={onNote}
+          onClose={() => setDrawerKey(null)}
+          onApprove={can(role, 'approvePayments') ? onApprove : null}
+          onRemove={onRemove}
+          supplier={drawerRow.kind === 'AP' ? findSupplier(data.suppliers, { supplierId: drawerRow.supplierId, partnerName: drawerRow.partner }) : null}
+          internal={internal}
+        />
+      )}
       <SnapshotModal
         open={!!viewSnap}
         onClose={() => setViewSnap(null)}

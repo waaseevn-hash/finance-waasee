@@ -62,3 +62,38 @@ export async function exportReport(el, baseName) {
     return 'html';
   }
 }
+
+/**
+ * Xuất các trang in (phần tử .page trong tài liệu in) thành một file PDF khổ A4 — mỗi trang chụp riêng,
+ * trang dài hơn A4 được cắt thành nhiều trang.
+ */
+export async function exportPagesPdf(printDoc, baseName) {
+  for (const src of LIBS) await loadScript(src);
+  if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('Không tải được thư viện tạo PDF. Dùng nút "In / Lưu PDF" thay thế.');
+  const body = printDoc.body;
+  const prevZoom = body.style.zoom;
+  body.style.zoom = '';
+  try {
+    const pages = [...printDoc.querySelectorAll('.page')];
+    const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    let first = true;
+    for (const el of pages) {
+      const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#ffffff', logging: false, windowWidth: el.scrollWidth });
+      const pxPerMm = canvas.width / 210;
+      const pageHpx = Math.floor(297 * pxPerMm);
+      for (let y = 0; y < canvas.height - 2; y += pageHpx) {
+        const h = Math.min(pageHpx, canvas.height - y);
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = h;
+        slice.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+        if (!first) pdf.addPage();
+        first = false;
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, h / pxPerMm);
+      }
+    }
+    await saveFile(`${baseName}.pdf`, pdf.output('arraybuffer'));
+  } finally {
+    body.style.zoom = prevZoom;
+  }
+}

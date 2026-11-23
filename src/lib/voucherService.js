@@ -1,0 +1,399 @@
+/**
+ * Ghi dữ liệu chứng từ thu chi nội bộ lên Firestore.
+ * Mọi thao tác nhiều tài liệu chạy trong giao dịch (runTransaction) có nhật ký gộp — xem db.js / firestore.rules.
+ */
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, serverTimestamp, where } from 'firebase/firestore';
+import { db } from './firebase.js';
+import { AuditedBatch, C, newId, runAuditedTx } from './db.js';
+import { todayISO } from './dates.js';
+import {
+  VTYPE,
+  buildApprovalNumbers,
+  buildPostingPlan,
+  buildReversalPlan,
+  counterKey,
+  countersNeeded,
+  settlement,
+  voucherAmount,
+} from './vouchers.js';
+import { fmtVND } from './format.js';
+
+/** Các trường người lập được sửa */
+export const CONTENT_KEYS = [
+  'type',
+  'date',
+  'person',
+  'position',
+  'address',
+  'reason',
+  'amount',
+  'items',
+  'total',
+  'advanceId',
+  'advanceNo',
+  'advanceAmount',
+  'expenseAccount',
+  'debit',
+  'credit',
+  'attachedDocs',
+  'bookNo',
+  'dueDate',
+  'attachments',
+];
+
+const num = (v) => Math.round(Number(v) || 0);
+
+/** Chuẩn hóa dữ liệu biểu mẫu thành tài liệu lưu trữ */
+export function normalizeForm(f) {
+  const items = f.type === 'TT'
+    ? (f.items || []).map((it) => ({ name: String(it.name || '').trim().slice(0, 300), unit: String(it.unit || '').trim().slice(0, 30), qty: Number(it.qty) || 0, price: num(it.price) }))
+    : [];
+  const out = {
+    type: f.type,
+    date: f.date,
+    person: String(f.person || '').trim().slice(0, 200),
+    position: String(f.position || '').trim().slice(0, 200),
+    address: String(f.address || '').trim().slice(0, 300),
+    reason: String(f.reason || '').trim().slice(0, 1000),
+    items,
+    advanceId: f.type === 'TT' ? f.advanceId || '' : '',
+    advanceNo: f.type === 'TT' ? f.advanceNo || '' : '',
+    advanceAmount: f.type === 'TT' ? Math.max(0, num(f.advanceAmount)) : 0,
+    expenseAccount: f.type === 'TT' ? String(f.expenseAccount || '642') : '',
+    debit: f.type === 'PC' ? String(f.debit || '642') : '',
+    credit: f.type === 'PT' ? String(f.credit || '141') : '',
+    attachedDocs: String(f.attachedDocs || '').trim().slice(0, 200),
+    bookNo: f.type === 'PT' || f.type === 'PC' ? String(f.bookNo || '').trim().slice(0, 20) : '',
+    dueDate: f.type === 'TU' ? f.dueDate || '' : '',
+    attachments: (f.attachments || []).slice(0, 12).map((a) => ({ id: a.id, name: a.name, type: a.type, size: a.size })),
+  };
+  out.amount = f.type === 'TT' ? items.reduce((s, it) => s + Math.round(it.qty * it.price), 0) : num(f.amount);
+  out.total = f.type === 'TT' ? out.amount : 0;
+  return out;
+}
+
+const describe = (v) => `${VTYPE[v.type]?.short || ''} ${v.no || ''} · ${v.person} · ${fmtVND(voucherAmount(v))}`.replace(/\s+/g, ' ').trim();
+
+/**
+ * Lưu chứng từ: mode 'draft' | 'submit' | 'approve' (chỉ quản lý).
+ * @returns id chứng từ
+ */
+export async function saveVoucher({ actor, id, existing, form, mode }) {
+  const content = normalizeForm(form);
+  const status = mode === 'draft' ? 'DRAFT' : mode === 'submit' ? 'PENDING' : 'APPROVED';
+  if (mode !== 'approve') {
+    const b = new AuditedBatch(actor);
+    if (!existing) {
+      b.create(
+        C.vouchers,
+        {
+          ...content,
+          status,
+          auto: false,
+          requestedBy: actor.email,
+          no: '',
+          approvedBy: '',
+          approvedByName: '',
+          approvedOn: '',
+          rejectReason: '',
+          postingBatchId: '',
+          postedOn: '',
+          settledAmount: 0,
+          entries: [],
+          cashEntryIds: [],
+          generatedIds: [],
+          submittedOn: status === 'PENDING' ? todayISO() : '',
+        },
+        `${status === 'PENDING' ? 'Lập & gửi duyệt' : 'Lập nháp'} ${describe(content)}`,
+        { id },
+      );
+    } else {
+      const patch = { ...content, status, rejectReason: existing.status === 'REJECTED' ? '' : existing.rejectReason || '', submittedOn: status === 'PENDING' ? todayISO() : existing.submittedOn || '' };
+      b.update(C.vouchers, existing.id, patch, existing, `${status === 'PENDING' ? 'Gửi duyệt' : 'Sửa nháp'} ${describe({ ...existing, ...content })}`);
+    }
+    await b.commit();
+    return existing?.id || id;
+  }
+
+  // Quản lý lưu & duyệt ngay: cấp số trong giao dịch
+  return runAuditedTx(actor, { summary: '', primaryPath: `${C.vouchers}/${existing?.id || id}` }, async (tx, audit) => {
+    const key = counterKey(content.type, content.date);
+    const cSnap = await tx.get(doc(db, C.counters, key));
+    let cur = null;
+    if (existing) {
+      const s = await tx.get(doc(db, C.vouchers, existing.id));
+      if (!s.exists()) throw new Error('Chứng từ không còn tồn tại');
+      cur = { id: s.id, ...s.data() };
+      if (!['DRAFT', 'PENDING', 'REJECTED'].includes(cur.status)) throw new Error('Chứng từ đã được duyệt hoặc kết chuyển bởi người khác');
+    }
+    const counters = { [key]: cSnap.exists() ? cSnap.data().value || 0 : 0 };
+    const vid = existing?.id || id;
+    const { numbers, counters: next } = buildApprovalNumbers({ vouchers: [{ id: vid, ...content, no: cur?.no || '' }], counters });
+    const approval = { status: 'APPROVED', no: numbers[vid], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: todayISO(), rejectReason: '' };
+    if (!cur) {
+      audit.create(
+        C.vouchers,
+        {
+          ...content,
+          ...approval,
+          auto: false,
+          requestedBy: actor.email,
+          postingBatchId: '',
+          postedOn: '',
+          settledAmount: 0,
+          entries: [],
+          cashEntryIds: [],
+          generatedIds: [],
+          submittedOn: todayISO(),
+        },
+        { id: vid },
+      );
+    } else {
+      audit.update(C.vouchers, vid, { ...content, ...approval }, cur);
+    }
+    if (next[key] !== counters[key]) tx.set(doc(db, C.counters, key), { value: next[key], updatedBy: actor.email, updatedAt: serverTimestamp() });
+    audit.summary = `Lập & duyệt ${describe({ ...content, no: approval.no })}`;
+    return vid;
+  });
+}
+
+/** Duyệt một hoặc nhiều chứng từ đang chờ duyệt (cấp số) */
+export function approveVouchers({ actor, ids }) {
+  return runAuditedTx(actor, { summary: '' }, async (tx, audit) => {
+    const snaps = await Promise.all(ids.map((id) => tx.get(doc(db, C.vouchers, id))));
+    const list = snaps.map((s) => {
+      if (!s.exists()) throw new Error('Có chứng từ không còn tồn tại. Tải lại trang.');
+      return { id: s.id, ...s.data() };
+    });
+    const bad = list.filter((v) => v.status !== 'PENDING');
+    if (bad.length) throw new Error(`${bad.map((v) => v.no || v.person).join(', ')} không còn ở trạng thái Chờ duyệt.`);
+    const keys = [...new Set(list.filter((v) => !v.no).map((v) => counterKey(v.type, v.date)))];
+    const cs = await Promise.all(keys.map((k) => tx.get(doc(db, C.counters, k))));
+    const counters = Object.fromEntries(keys.map((k, i) => [k, cs[i].exists() ? cs[i].data().value || 0 : 0]));
+    const { numbers, counters: next } = buildApprovalNumbers({ vouchers: list, counters });
+    const today = todayISO();
+    for (const v of list) {
+      audit.update(C.vouchers, v.id, { status: 'APPROVED', no: numbers[v.id], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: today, rejectReason: '' }, v);
+    }
+    for (const k of keys) {
+      if (next[k] !== counters[k]) tx.set(doc(db, C.counters, k), { value: next[k], updatedBy: actor.email, updatedAt: serverTimestamp() });
+    }
+    audit.summary = list.length === 1 ? `Duyệt ${describe({ ...list[0], no: numbers[list[0].id] })}` : `Duyệt ${list.length} chứng từ: ${list.map((v) => numbers[v.id]).join(', ')}`;
+    return numbers;
+  });
+}
+
+/** Từ chối (kèm lý do) hoặc hủy duyệt (đưa về Chờ duyệt) */
+export async function rejectVoucher({ actor, v, reason, toPending = false }) {
+  const b = new AuditedBatch(actor);
+  const patch = toPending
+    ? { status: 'PENDING', approvedBy: '', approvedByName: '', approvedOn: '' }
+    : { status: 'REJECTED', rejectReason: String(reason || '').trim().slice(0, 500), rejectedBy: actor.email, rejectedOn: todayISO(), approvedBy: '', approvedByName: '', approvedOn: '' };
+  b.update(C.vouchers, v.id, patch, v, `${toPending ? 'Hủy duyệt' : `Từ chối (${patch.rejectReason})`} ${describe(v)}`);
+  await b.commit();
+}
+
+/** Xóa chứng từ chưa cấp số (kèm ảnh đính kèm) */
+export async function deleteVoucher({ actor, v }) {
+  const b = new AuditedBatch(actor);
+  b.remove(C.vouchers, v.id, v, `Xóa ${describe(v)}`);
+  for (const a of v.attachments || []) b.batch.delete(doc(db, C.voucherFiles, a.id));
+  await b.commit();
+}
+
+/**
+ * KẾT XUẤT & KẾT CHUYỂN (một giao dịch nguyên tử)
+ *   1. Đọc lại từng chứng từ: phải đang "Đã duyệt" (chống kết chuyển trùng khi 2 người bấm cùng lúc)
+ *   2. Cấp số đợt KC-YYYYMMDD-NN, số phiếu thu/chi sinh tự động
+ *   3. Ghi sổ quỹ (mã bút toán cố định), cập nhật quyết toán tạm ứng, khóa chứng từ (Đã kết chuyển)
+ */
+export async function postVouchers({ actor, ids, postDate }) {
+  if (!ids.length) throw new Error('Chưa chọn chứng từ nào');
+  if (ids.length > 80) throw new Error('Mỗi đợt kết chuyển tối đa 80 chứng từ. Chia thành nhiều đợt.');
+  const batchId = newId(C.batches);
+  return runAuditedTx(actor, { summary: '', primaryPath: `${C.batches}/${batchId}` }, async (tx, audit) => {
+    const snaps = await Promise.all(ids.map((id) => tx.get(doc(db, C.vouchers, id))));
+    const vouchers = snaps.map((s) => {
+      if (!s.exists()) throw new Error('Có chứng từ không còn tồn tại. Tải lại trang.');
+      return { id: s.id, ...s.data() };
+    });
+    const notReady = vouchers.filter((v) => v.status !== 'APPROVED' || v.auto);
+    if (notReady.length)
+      throw new Error(`Không kết chuyển được: ${notReady.map((v) => v.no || v.person).join(', ')} không còn ở trạng thái "Đã duyệt" (có thể vừa được người khác kết chuyển). Tải lại danh sách.`);
+    const advIds = [...new Set(vouchers.filter((v) => v.type === 'TT' && v.advanceId && settlement(v).B > 0).map((v) => v.advanceId))];
+    const advSnaps = await Promise.all(advIds.map((id) => tx.get(doc(db, C.vouchers, id))));
+    const advances = {};
+    advSnaps.forEach((s) => {
+      if (s.exists()) advances[s.id] = { id: s.id, ...s.data() };
+    });
+    const keys = countersNeeded(vouchers, postDate);
+    const cs = await Promise.all(keys.map((k) => tx.get(doc(db, C.counters, k))));
+    const counters = Object.fromEntries(keys.map((k, i) => [k, cs[i].exists() ? cs[i].data().value || 0 : 0]));
+
+    const plan = buildPostingPlan({ vouchers, advances, counters, postDate, newId: () => newId(C.vouchers), batchId, actorEmail: actor.email });
+    const byId = Object.fromEntries(vouchers.map((v) => [v.id, v]));
+
+    audit.create(C.batches, { ...plan.batch, posterName: actor.name || actor.email }, { id: batchId });
+    for (const g of plan.generated) {
+      const src = byId[g.data.sourceId];
+      audit.create(
+        C.vouchers,
+        {
+          ...g.data,
+          requestedBy: src?.requestedBy || actor.email,
+          items: [],
+          advanceId: '',
+          advanceNo: '',
+          advanceAmount: 0,
+          expenseAccount: '',
+          dueDate: '',
+          attachments: [],
+          approvedByName: src?.approvedByName || '',
+          approvedOn: src?.approvedOn || '',
+          rejectReason: '',
+          settledAmount: 0,
+          cashEntryIds: [],
+          generatedIds: [],
+        },
+        { id: g.id },
+      );
+    }
+    for (const u of plan.voucherUpdates) audit.update(C.vouchers, u.id, u.patch, u.before);
+    for (const c of plan.cashEntries) audit.create(C.cash, c.data, { id: c.id });
+    for (const [id, a] of Object.entries(plan.advanceUpdates)) audit.update(C.vouchers, id, { settledAmount: a.settledAmount }, a.before);
+    for (const k of keys) {
+      if (plan.counters[k] !== counters[k]) tx.set(doc(db, C.counters, k), { value: plan.counters[k], updatedBy: actor.email, updatedAt: serverTimestamp() });
+    }
+    audit.summary = `Kết chuyển ${plan.batchCode}: ${vouchers.length} chứng từ — thu ${fmtVND(plan.batch.receiptsTotal)}, chi ${fmtVND(plan.batch.paymentsTotal)}`;
+    audit.logData = { code: plan.batchCode, voucherNos: plan.batch.docNos, receiptsTotal: plan.batch.receiptsTotal, paymentsTotal: plan.batch.paymentsTotal, net: plan.batch.net };
+    return { batchId, batch: { id: batchId, ...plan.batch, posterName: actor.name || actor.email }, docs: plan.docs };
+  });
+}
+
+/** HỦY KẾT CHUYỂN / ĐẢO BÚT TOÁN một chứng từ — chỉ Chủ doanh nghiệp */
+export async function reverseVoucher({ actor, id, reason }) {
+  const date = todayISO();
+  return runAuditedTx(actor, { summary: '', primaryPath: `${C.vouchers}/${id}` }, async (tx, audit) => {
+    const vs = await tx.get(doc(db, C.vouchers, id));
+    if (!vs.exists()) throw new Error('Chứng từ không còn tồn tại');
+    const v = { id: vs.id, ...vs.data() };
+    const gens = (await Promise.all((v.generatedIds || []).map((g) => tx.get(doc(db, C.vouchers, g))))).filter((s) => s.exists()).map((s) => ({ id: s.id, ...s.data() }));
+    const cash = (await Promise.all((v.cashEntryIds || []).map((c) => tx.get(doc(db, C.cash, c))))).filter((s) => s.exists()).map((s) => ({ id: s.id, ...s.data() }));
+    const s = settlement(v);
+    let advance = null;
+    if (v.type === 'TT' && v.advanceId && s.B > 0) {
+      const as = await tx.get(doc(db, C.vouchers, v.advanceId));
+      if (as.exists()) advance = { id: as.id, ...as.data() };
+    }
+    const bs = v.postingBatchId ? await tx.get(doc(db, C.batches, v.postingBatchId)) : null;
+    const plan = buildReversalPlan({ v, gens, cash, advance, reverseDate: date, reason, batchId: v.postingBatchId });
+
+    for (const r of plan.reversals) audit.create(C.cash, r.data, { id: r.id });
+    for (const g of plan.cancelGenerated) audit.update(C.vouchers, g.id, { status: 'CANCELLED', cancelledOn: date, cancelReason: String(reason || '').slice(0, 500) }, g.before);
+    if (plan.advanceUpdate) audit.update(C.vouchers, plan.advanceUpdate.id, { settledAmount: plan.advanceUpdate.settledAmount }, plan.advanceUpdate.before);
+    audit.update(C.vouchers, v.id, plan.voucherPatch, v);
+    if (bs?.exists()) {
+      const b = { id: bs.id, ...bs.data() };
+      const reversedIds = [...new Set([...(b.reversedIds || []), v.id])];
+      audit.update(C.batches, b.id, { reversedIds, reversedCount: reversedIds.length, status: reversedIds.length >= (b.voucherIds || []).length ? 'REVERSED' : 'PARTIAL' }, b);
+    }
+    audit.summary = `Hủy kết chuyển ${describe(v)} — đảo ${plan.reversals.length} bút toán sổ quỹ${reason ? `: ${reason}` : ''}`;
+    audit.logData = { voucherNo: v.no, reason, reversals: plan.reversals.map((r) => r.id) };
+    return plan;
+  });
+}
+
+/* ---------------- Ảnh / file đính kèm ---------------- */
+const MAX_FILE_CHARS = 950000;
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error(`Không đọc được file ${file.name}`));
+    r.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Không mở được ảnh (định dạng không hỗ trợ)'));
+    img.src = src;
+  });
+}
+
+/** Nén ảnh: cạnh dài tối đa 1600px, JPEG; giảm dần đến khi vừa giới hạn lưu trữ */
+export async function compressImage(file) {
+  const src = await readAsDataUrl(file);
+  const img = await loadImage(src);
+  for (const [maxSide, q] of [
+    [1600, 0.72],
+    [1400, 0.62],
+    [1100, 0.55],
+    [900, 0.5],
+  ]) {
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const out = canvas.toDataURL('image/jpeg', q);
+    if (out.length < MAX_FILE_CHARS) return { dataUrl: out, type: 'image/jpeg', size: Math.round((out.length * 3) / 4) };
+  }
+  throw new Error(`Ảnh ${file.name} quá lớn, không nén được. Chụp lại với độ phân giải thấp hơn.`);
+}
+
+/** Tải một file lên (ảnh được nén; PDF tối đa ~700KB). Trả về thông tin đính kèm */
+export async function uploadAttachment({ actor, voucherId, requestedBy, file }) {
+  let payload;
+  if (String(file.type).startsWith('image/')) payload = await compressImage(file);
+  else if (file.type === 'application/pdf') {
+    const dataUrl = await readAsDataUrl(file);
+    if (dataUrl.length >= MAX_FILE_CHARS) throw new Error(`File ${file.name} lớn hơn 700KB. Hãy chụp ảnh chứng từ thay vì đính kèm PDF.`);
+    payload = { dataUrl, type: 'application/pdf', size: file.size };
+  } else throw new Error(`${file.name}: chỉ hỗ trợ ảnh (JPG, PNG, HEIC…) hoặc PDF`);
+  const id = newId(C.voucherFiles);
+  const name = String(file.name || 'chung-tu').slice(0, 200);
+  await setDoc(doc(db, C.voucherFiles, id), {
+    voucherId,
+    requestedBy,
+    name,
+    type: payload.type,
+    size: payload.size,
+    dataUrl: payload.dataUrl,
+    createdBy: actor.email,
+    createdAt: serverTimestamp(),
+  });
+  return { id, name, type: payload.type, size: payload.size };
+}
+
+export async function removeAttachment(id) {
+  await deleteDoc(doc(db, C.voucherFiles, id));
+}
+
+/** Đọc nội dung file đính kèm theo danh sách id */
+export async function loadAttachments(list) {
+  const out = [];
+  for (const a of list || []) {
+    try {
+      const s = await getDoc(doc(db, C.voucherFiles, a.id));
+      if (s.exists()) out.push({ id: s.id, ...s.data() });
+    } catch {
+      /* không có quyền / đã xóa: bỏ qua */
+    }
+  }
+  return out;
+}
+
+/** Các bút toán sổ quỹ của một đợt (để đối chiếu) */
+export async function loadBatchCash(batchId) {
+  const s = await getDocs(query(collection(db, C.cash), where('postingBatchId', '==', batchId)));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+}

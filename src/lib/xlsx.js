@@ -1,4 +1,3 @@
-import { saveFile } from './runtime.js';
 
 /**
  * Xuất file Excel (.xlsx) tối giản, không cần thư viện ngoài.
@@ -115,41 +114,78 @@ function colName(i) {
   return s;
 }
 
-function sheetXml({ rows, colWidths = [] }) {
+/** Kiểu ô: tên -> chỉ số trong cellXfs */
+const STYLE = { normal: 0, bold: 1, money: 2, moneyBold: 3, header: 4, title: 5, cell: 6, moneyCell: 7, totalCell: 8, italic: 9, totalLabel: 10, wrapCell: 11 };
+
+/**
+ * Ô có thể là giá trị thường (số / chữ) hoặc đối tượng { v, f, s }:
+ *   v = giá trị (hoặc kết quả tính sẵn của công thức), f = công thức Excel (không có dấu =), s = kiểu ô (STYLE)
+ * Bảng "styled": không tự in đậm dòng đầu; headerRows = các dòng tiêu đề; freezeRows = số dòng cố định.
+ */
+function cellXml(ref, v, r, styled, headerRow) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'object' && !Array.isArray(v)) {
+    const s = STYLE[v.s] ?? (typeof v.v === 'number' ? STYLE.money : STYLE.normal);
+    if (v.f) {
+      const val = typeof v.v === 'number' && Number.isFinite(v.v) ? `<v>${v.v}</v>` : '';
+      return `<c r="${ref}" s="${s}"><f>${esc(v.f)}</f>${val}</c>`;
+    }
+    if (v.v === null || v.v === undefined || v.v === '') return s ? `<c r="${ref}" s="${s}"/>` : '';
+    if (typeof v.v === 'number' && Number.isFinite(v.v)) return `<c r="${ref}" s="${s}"><v>${v.v}</v></c>`;
+    return `<c r="${ref}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${esc(v.v)}</t></is></c>`;
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return `<c r="${ref}" s="${headerRow ? STYLE.bold : STYLE.money}"><v>${v}</v></c>`;
+  }
+  return `<c r="${ref}" t="inlineStr" s="${headerRow ? (styled ? STYLE.header : STYLE.bold) : STYLE.normal}"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+}
+
+function sheetXml({ rows, colWidths = [], styled = false, headerRows, freezeRows, merges = [], landscape = false }) {
+  const heads = new Set(headerRows ?? (styled ? [] : [0]));
+  const freeze = freezeRows ?? (styled ? 0 : 1);
   const cols = colWidths.length
     ? `<cols>${colWidths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>`
     : '';
   const body = rows
     .map((row, r) => {
-      const cells = row
-        .map((v, c) => {
-          const ref = `${colName(c)}${r + 1}`;
-          if (v === null || v === undefined || v === '') return '';
-          if (typeof v === 'number' && Number.isFinite(v)) {
-            return `<c r="${ref}" s="${r === 0 ? 1 : 2}"><v>${v}</v></c>`;
-          }
-          return `<c r="${ref}" t="inlineStr" s="${r === 0 ? 1 : 0}"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
-        })
-        .join('');
+      const cells = (row || []).map((v, c) => cellXml(`${colName(c)}${r + 1}`, v, r, styled, heads.has(r))).join('');
       return `<row r="${r + 1}">${cells}</row>`;
     })
     .join('');
+  const pane = freeze > 0 ? `<pane ySplit="${freeze}" topLeftCell="A${freeze + 1}" activePane="bottomLeft" state="frozen"/>` : '';
+  const mergeXml = merges.length ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : '';
+  const setup = `<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="${landscape ? 'landscape' : 'portrait'}" fitToWidth="1" fitToHeight="0"/>`;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${cols}<sheetData>${body}</sheetData></worksheet>`;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews>${cols}<sheetData>${body}</sheetData>${mergeXml}${setup}</worksheet>`;
 }
 
+export { STYLE as XLSX_STYLE };
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
-<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
-<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font><font><i/><sz val="10"/><color rgb="FF555555"/><name val="Calibri"/></font></fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7EDF5"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF4D6"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF9AA5B1"/></left><right style="thin"><color rgb="FF9AA5B1"/></right><top style="thin"><color rgb="FF9AA5B1"/></top><bottom style="thin"><color rgb="FF9AA5B1"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>
+<cellXfs count="12">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="3" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="3" fontId="1" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+</cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
 
 /**
- * @param {{name: string, rows: any[][], colWidths?: number[]}[]} sheets  — dòng đầu là tiêu đề
+ * @param {{name: string, rows: any[][], colWidths?: number[], styled?: boolean, headerRows?: number[], freezeRows?: number, merges?: string[], landscape?: boolean}[]} sheets
+ *   Mặc định (không styled): dòng đầu là tiêu đề in đậm, cố định dòng 1.
  * @returns {Uint8Array}
  */
 export function buildXlsx(sheets) {
@@ -172,7 +208,7 @@ export function buildXlsx(sheets) {
       data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets
         .map((s, i) => `<sheet name="${esc(safeName(s.name, i))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
-        .join('')}</sheets></workbook>`,
+        .join('')}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
     },
     {
       name: 'xl/_rels/workbook.xml.rels',
@@ -189,5 +225,6 @@ export function buildXlsx(sheets) {
 
 export async function downloadXlsx(filename, sheets) {
   const bytes = buildXlsx(sheets);
+  const { saveFile } = await import('./runtime.js');
   return saveFile(filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`, bytes);
 }

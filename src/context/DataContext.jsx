@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext.jsx';
-import { C, friendlyError, subscribeCollection } from '../lib/db.js';
+import { C, friendlyError, subscribeCollection, subscribeWhere } from '../lib/db.js';
 import { can } from '../lib/roles.js';
 
 const DataContext = createContext(null);
 
-const EMPTY = { cash: [], banks: [], loans: [], ar: [], ap: [], suppliers: [], approvals: [] };
+const EMPTY = { cash: [], banks: [], loans: [], ar: [], ap: [], suppliers: [], approvals: [], vouchers: [], batches: [] };
 
 /**
  * Đồng bộ thời gian thực các bộ sưu tập chính.
@@ -13,10 +13,12 @@ const EMPTY = { cash: [], banks: [], loans: [], ar: [], ap: [], suppliers: [], a
  * (và rules cũng chặn nếu cố tình gọi).
  */
 export function DataProvider({ children }) {
-  const { role, status } = useAuth();
+  const { role, status, me } = useAuth();
+  const email = me?.email || '';
   const [data, setData] = useState(EMPTY);
   const [loaded, setLoaded] = useState({});
   const [error, setError] = useState(null);
+  const [voucherError, setVoucherError] = useState(null);
 
   useEffect(() => {
     if (status !== 'ready' || !role) return undefined;
@@ -44,13 +46,30 @@ export function DataProvider({ children }) {
     sub('ap', C.ap);
     sub('suppliers', C.partners);
     sub('approvals', C.approvals);
+    // Chứng từ nội bộ: lỗi (vd luật bảo mật chưa cập nhật) không làm hỏng các màn hình khác
+    setVoucherError(null);
+    const onRows = (key) => (rows) => {
+      setData((d) => ({ ...d, [key]: rows }));
+      setLoaded((l) => (l[key] ? l : { ...l, [key]: true }));
+    };
+    const onVErr = (key) => (err) => {
+      setVoucherError(friendlyError(err));
+      setLoaded((l) => ({ ...l, [key]: true }));
+    };
+    if (can(role, 'approveVouchers')) {
+      subs.push(subscribeCollection(C.vouchers, onRows('vouchers'), onVErr('vouchers')));
+      subs.push(subscribeCollection(C.batches, onRows('batches'), onVErr('batches')));
+    } else if (email) {
+      subs.push(subscribeWhere(C.vouchers, 'requestedBy', email, onRows('vouchers'), onVErr('vouchers')));
+      setLoaded((l) => ({ ...l, batches: true }));
+    }
     return () => subs.forEach((u) => u());
-  }, [role, status]);
+  }, [role, status, email]);
 
   const value = useMemo(() => {
     const need = can(role, 'viewTreasury') ? ['cash', 'banks', 'loans', 'ar', 'ap', 'suppliers', 'approvals'] : ['ar', 'ap', 'suppliers', 'approvals'];
-    return { ...data, loaded, ready: need.every((k) => loaded[k]), error };
-  }, [data, loaded, error, role]);
+    return { ...data, loaded, ready: need.every((k) => loaded[k]), vouchersReady: !!loaded.vouchers && !!loaded.batches, error, voucherError };
+  }, [data, loaded, error, voucherError, role]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }

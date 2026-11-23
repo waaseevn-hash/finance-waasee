@@ -13,6 +13,7 @@ import {
   HandCoins,
   History,
   Landmark,
+  Lock,
   Pencil,
   PiggyBank,
   Plus,
@@ -189,8 +190,14 @@ function CashPanel({ opts, onClose }) {
                   Tồn <Money value={e.balance} />
                 </span>
               </div>
-              <RowAction icon={Pencil} title="Sửa" onClick={() => setModal({ initial: e })} />
-              <RowAction icon={Trash2} title="Xóa" tone="danger" onClick={() => remove(e)} />
+              {e.voucherId ? (
+                <RowAction icon={Lock} title={`Bút toán từ chứng từ ${e.voucherNo || ''} — đã khóa`} onClick={() => setModal({ initial: e })} />
+              ) : (
+                <>
+                  <RowAction icon={Pencil} title="Sửa" onClick={() => setModal({ initial: e })} />
+                  <RowAction icon={Trash2} title="Xóa" tone="danger" onClick={() => remove(e)} />
+                </>
+              )}
             </li>
           ))}
         </ul>

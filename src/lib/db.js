@@ -9,7 +9,7 @@
  *     hành động. => Không ai (kể cả gọi API trực tiếp) có thể sửa số
  *     liệu mà không để lại dấu vết. Nhật ký không thể sửa/xóa.
  */
-import { collection, doc, onSnapshot, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { db } from './firebase.js';
 
 
@@ -28,6 +28,10 @@ export const C = {
   snapshots: 'plan_snapshots',
   settings: 'settings',
   audit: 'audit_logs',
+  vouchers: 'internal_vouchers',
+  voucherFiles: 'voucher_files',
+  batches: 'posting_batches',
+  counters: 'counters',
 };
 
 export const COLLECTION_LABEL = {
@@ -42,6 +46,8 @@ export const COLLECTION_LABEL = {
   partners: 'Danh bạ nhà cung cấp',
   plans: 'Bản nháp kế hoạch tháng',
   plan_snapshots: 'Kế hoạch tháng đã chốt',
+  internal_vouchers: 'Chứng từ thu chi nội bộ',
+  posting_batches: 'Đợt kết chuyển chứng từ',
 };
 
 
@@ -142,6 +148,87 @@ export class AuditedBatch {
   }
 }
 
+/**
+ * Giao dịch có nhật ký gộp (dùng cho duyệt hàng loạt, kết chuyển, hủy kết chuyển).
+ * Mọi tài liệu ghi trong giao dịch cùng trỏ tới MỘT dòng nhật ký hành động 'BATCH'
+ * liệt kê toàn bộ đường dẫn (docPaths). Luật bảo mật chấp nhận ghi khi đường dẫn có trong danh sách.
+ * Giao dịch Firestore: nếu một chứng từ đã bị người khác thay đổi giữa chừng, toàn bộ bị hủy và chạy lại.
+ */
+export class AuditedTx {
+  constructor(tx, actor, { summary = '', logData = null, primaryPath = '' } = {}) {
+    if (!actor?.email) throw new Error('Chưa đăng nhập');
+    this.tx = tx;
+    this.actor = actor;
+    this.summary = summary;
+    this.logData = logData;
+    this.primaryPath = primaryPath;
+    this.logRef = doc(collection(db, C.audit));
+    this.paths = [];
+    this.ops = [];
+  }
+
+  _meta() {
+    return { updatedBy: this.actor.email, updatedAt: serverTimestamp(), _auditId: this.logRef.id };
+  }
+
+  create(coll, data, { id } = {}) {
+    const ref = id ? doc(db, coll, id) : doc(collection(db, coll));
+    this.tx.set(ref, {
+      ...data,
+      createdBy: this.actor.email,
+      createdByName: this.actor.name || this.actor.email,
+      createdAt: serverTimestamp(),
+      ...this._meta(),
+    });
+    this.paths.push(`${coll}/${ref.id}`);
+    this.ops.push({ op: 'CREATE', path: `${coll}/${ref.id}`, after: cleanForLog(data) });
+    return ref.id;
+  }
+
+  update(coll, id, patch, before) {
+    this.tx.update(doc(db, coll, id), { ...patch, ...this._meta() });
+    this.paths.push(`${coll}/${id}`);
+    this.ops.push({ op: 'UPDATE', path: `${coll}/${id}`, changes: diffForLog(before, { ...before, ...patch }) });
+  }
+
+  /** Ghi dòng nhật ký gộp — gọi cuối cùng trong hàm giao dịch */
+  finish() {
+    this.tx.set(this.logRef, {
+      at: serverTimestamp(),
+      actorEmail: this.actor.email,
+      actorName: this.actor.name || this.actor.email,
+      action: 'BATCH',
+      docPath: this.primaryPath || this.paths[0] || '',
+      docPaths: this.paths,
+      collection: (this.primaryPath || this.paths[0] || '').split('/')[0],
+      summary: this.summary,
+      before: null,
+      after: this.logData ? cleanForLog(this.logData) : null,
+      changes: [],
+      ops: this.ops.slice(0, 400),
+    });
+  }
+}
+
+/** Chạy một giao dịch có nhật ký gộp. fn(tx, audit) phải đọc trước rồi mới ghi. */
+export function runAuditedTx(actor, meta, fn) {
+  return runTransaction(db, async (tx) => {
+    const audit = new AuditedTx(tx, actor, meta);
+    const result = await fn(tx, audit);
+    audit.finish();
+    return result;
+  });
+}
+
+/** Lắng nghe realtime theo điều kiện field == value */
+export function subscribeWhere(coll, field, value, onData, onError) {
+  return onSnapshot(
+    query(collection(db, coll), where(field, '==', value)),
+    (snap) => onData(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (err) => onError?.(err),
+  );
+}
+
 /** Lắng nghe realtime cả một bộ sưu tập */
 export function subscribeCollection(coll, onData, onError) {
   return onSnapshot(
@@ -151,8 +238,8 @@ export function subscribeCollection(coll, onData, onError) {
   );
 }
 
-export function newId() {
-  return doc(collection(db, C.audit)).id;
+export function newId(coll = C.audit) {
+  return doc(collection(db, coll)).id;
 }
 
 export function friendlyError(err) {

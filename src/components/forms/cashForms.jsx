@@ -41,7 +41,65 @@ import {
 
 export const TYPE_LABEL = { IN: 'Thu', OUT: 'Chi' };
 
-export function EntryModal({ open, onClose, initial, defaultType, balance }) {
+/** Mở một chứng từ nội bộ ở màn hình Chứng từ thu chi */
+export function openVoucher(id) {
+  sessionStorage.setItem('openVoucher', id);
+  window.dispatchEvent(new CustomEvent('open-voucher', { detail: id }));
+  window.location.hash = 'vouchers-all';
+}
+
+/** Bút toán sinh từ chứng từ nội bộ: chỉ xem, không sửa / xóa (sửa bằng Hủy kết chuyển) */
+function LockedEntry({ entry, onClose }) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Bút toán từ chứng từ ${entry.voucherNo || ''}`}
+      subtitle={entry.reversalOf ? 'Bút toán đảo (hủy kết chuyển)' : 'Ghi sổ tự động khi kết chuyển'}
+      footer={
+        <>
+          <Button onClick={onClose}>Đóng</Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              onClose();
+              openVoucher(entry.sourceVoucherId || entry.voucherId);
+            }}
+          >
+            Mở chứng từ
+          </Button>
+        </>
+      }
+    >
+      <dl className="space-y-2 text-sm">
+        <div className="flex justify-between gap-3">
+          <dt className="text-slate-500">Ngày</dt>
+          <dd>{fmtDate(entry.date)}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-slate-500">{entry.type === 'IN' ? 'Thu' : 'Chi'}</dt>
+          <dd>
+            <Money value={entry.amount} className="font-semibold" />
+          </dd>
+        </div>
+        <div>
+          <dt className="text-slate-500">Nội dung</dt>
+          <dd className="text-slate-800">{entry.description}</dd>
+        </div>
+      </dl>
+      <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        Bút toán này đã khóa vì sinh từ chứng từ đã kết chuyển. Muốn điều chỉnh, Chủ doanh nghiệp mở chứng từ và chọn “Hủy kết chuyển” — hệ thống ghi bút toán đảo, không xóa lịch sử.
+      </p>
+    </Modal>
+  );
+}
+
+export function EntryModal(props) {
+  if (props.open && props.initial?.voucherId) return <LockedEntry entry={props.initial} onClose={props.onClose} />;
+  return <EditableEntryModal {...props} />;
+}
+
+function EditableEntryModal({ open, onClose, initial, defaultType, balance }) {
   const { actor } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();

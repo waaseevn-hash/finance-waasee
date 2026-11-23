@@ -17,6 +17,7 @@ const VARIANTS = {
   jade: 'bg-jade-600 text-white hover:bg-jade-700 shadow-sm shadow-jade-700/20',
   vermilion: 'bg-vermilion-500 text-white hover:bg-vermilion-600 shadow-sm shadow-vermilion-700/20',
   orchid: 'bg-orchid-600 text-white hover:bg-orchid-700 shadow-sm shadow-orchid-700/20',
+  amber: 'bg-amber-700 text-white hover:bg-amber-800 shadow-sm shadow-amber-900/20',
   white: 'bg-white/95 text-ink-900 hover:bg-white shadow-sm',
   glass: 'bg-white/15 text-white hover:bg-white/25 ring-1 ring-inset ring-white/25',
   dangerGhost: 'text-rose-600 hover:bg-rose-50',

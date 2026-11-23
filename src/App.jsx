@@ -11,6 +11,7 @@ import Cashbook from './pages/Cashbook.jsx';
 import BankCredit from './pages/BankCredit.jsx';
 import Partners from './pages/Partners.jsx';
 import Planner from './pages/Planner.jsx';
+import Vouchers from './pages/Vouchers.jsx';
 import Admin from './pages/Admin.jsx';
 import { ROUTES, can } from './lib/roles.js';
 
@@ -18,6 +19,8 @@ import { ROUTES, can } from './lib/roles.js';
 function parseHash() {
   const raw = window.location.hash.replace(/^#\/?/, '');
   if (['partners-ap', 'partners-ar', 'partners-ncc', 'partners-chi'].includes(raw)) return { route: 'partners', params: { tab: raw.replace('partners-', '') } };
+  const vm = /^vouchers-(all|pending|post|batches|advances)$/.exec(raw);
+  if (vm) return { route: 'vouchers', params: { tab: vm[1] } };
   return { route: raw || 'dashboard', params: {} };
 }
 
@@ -37,7 +40,7 @@ function useHashRoute() {
   return { ...loc, navigate };
 }
 
-const PAGES = { dashboard: Dashboard, cash: Cashbook, bank: BankCredit, partners: Partners, planner: Planner, admin: Admin };
+const PAGES = { dashboard: Dashboard, cash: Cashbook, bank: BankCredit, partners: Partners, vouchers: Vouchers, planner: Planner, admin: Admin };
 
 function Main() {
   const { role } = useAuth();

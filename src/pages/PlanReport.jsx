@@ -22,20 +22,21 @@ function supplierPayments(rows, suppliers) {
   return [...groups.values()];
 }
 
-const GROUP_OF = { AP: 'SUPPLIER', CUSTOM: 'FIXED', LOAN: 'BANK', INTEREST: 'BANK' };
-const GROUP_LABEL = { SUPPLIER: 'Trả nhà cung cấp', FIXED: 'Chi cố định', BANK: 'Trả ngân hàng' };
+const GROUP_OF = { AP: 'SUPPLIER', CUSTOM: 'FIXED', LOAN: 'BANK', INTEREST: 'BANK', INTERNAL: 'INTERNAL' };
+const GROUP_LABEL = { SUPPLIER: 'Trả nhà cung cấp', FIXED: 'Chi cố định', BANK: 'Trả ngân hàng', INTERNAL: 'Chi nội bộ (chứng từ đã duyệt)' };
 const GROUP_ROWS = [
   ['SUPPLIER', 'A. Trả nhà cung cấp'],
   ['FIXED', 'B. Chi cố định (lương, thuế, vận hành…)'],
   ['BANK', 'C. Trả ngân hàng (lãi vay, đáo hạn)'],
+  ['INTERNAL', 'D. Chi nội bộ (chứng từ đã duyệt, chờ kết chuyển)'],
 ];
 
 /** Cân đối nguồn tiền; tính lại được cho cả bản chốt cũ (trước khi có "Tổng có" và giải ngân) */
 function funding(s, t, paid) {
   const have = s.haveTotal ?? (Number(s.cashUsable) || 0) + (Number(s.depositUsable) || 0);
   const base = s.haveTotal != null ? s.baseSources : have + (Number(s.arIn) || 0);
-  const groups = { SUPPLIER: 0, FIXED: 0, BANK: 0 };
-  const count = { SUPPLIER: 0, FIXED: 0, BANK: 0 };
+  const groups = { SUPPLIER: 0, FIXED: 0, BANK: 0, INTERNAL: 0 };
+  const count = { SUPPLIER: 0, FIXED: 0, BANK: 0, INTERNAL: 0 };
   for (const r of paid) {
     const g = r.group || GROUP_OF[r.kind] || 'FIXED';
     groups[g] += Number(r.amount) || 0;
@@ -117,7 +118,7 @@ export default function PlanReport({ snap, variance, creatorName, suppliers = []
             <td className={cell}>(2) TỔNG PHẢI CHI ({paid.length} khoản)</td>
             <td className={`${cell} ${R}`}>{fmtVND(t.payTotal)}</td>
           </tr>
-          {GROUP_ROWS.map(([k, label]) => (
+          {GROUP_ROWS.filter(([k]) => k !== 'INTERNAL' || f.count.INTERNAL > 0).map(([k, label]) => (
             <tr key={k}>
               <td className={`${cell} pl-6`}>
                 {label} ({f.count[k]} khoản)

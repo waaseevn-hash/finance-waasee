@@ -4,6 +4,7 @@ import {
   CircleArrowUp,
   ClipboardCheck,
   FileSpreadsheet,
+  Lock,
   Pencil,
   Plus,
   Search,
@@ -21,7 +22,7 @@ import { downloadXlsx } from '../lib/xlsx.js';
 import { resolveNames } from '../lib/runtime.js';
 import { Who } from '../components/Who.jsx';
 import { useQuick } from '../components/QuickPanels.jsx';
-import { CountModal, EntryModal, TYPE_LABEL } from '../components/forms/cashForms.jsx';
+import { CountModal, EntryModal, TYPE_LABEL, openVoucher } from '../components/forms/cashForms.jsx';
 import { Money, MoneyInput } from '../components/Money.jsx';
 import { useConfirm, useToast } from '../components/feedback.jsx';
 import {
@@ -42,6 +43,9 @@ import {
   td,
   th,
 } from '../components/ui.jsx';
+
+/** Nội dung bút toán từ chứng từ đã có số phiếu ở nhãn riêng: bỏ phần số phiếu lặp lại ở đầu */
+const stripNo = (e) => (e.voucherNo && String(e.description || '').startsWith(e.voucherNo) ? e.description.slice(e.voucherNo.length).replace(/^\s*—\s*/, '') : e.description);
 
 export default function Cashbook() {
   const { cash, loaded } = useData();
@@ -182,7 +186,14 @@ export default function Cashbook() {
                     <tr key={e.id} className="hover:bg-slate-50/70 group">
                       <td className={cx(td, 'whitespace-nowrap tabular-nums text-slate-500')}>{fmtDate(e.date)}</td>
                       <td className={td}>
-                        <p className="font-medium text-slate-800">{e.description}</p>
+                        <p className="font-medium text-slate-800">
+                          {e.voucherNo && (
+                            <button type="button" onClick={() => openVoucher(e.sourceVoucherId || e.voucherId)} className="mr-1.5 rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200 hover:bg-amber-100" title="Mở chứng từ">
+                              {e.voucherNo}
+                            </button>
+                          )}
+                          {stripNo(e)}
+                        </p>
                         <p className="text-xs text-slate-500">
                           {e.counterparty}
                           {e.note && <span className="text-slate-400"> · {e.note}</span>}
@@ -197,7 +208,7 @@ export default function Cashbook() {
                         <Who id={e.createdBy} />
                       </td>
                       <td className={cx(td, 'text-right whitespace-nowrap')}>
-                        <Button size="iconSm" variant="ghost" icon={Pencil} onClick={() => setModal({ initial: e })} title="Sửa / Xóa" />
+                        <Button size="iconSm" variant="ghost" icon={e.voucherId ? Lock : Pencil} onClick={() => setModal({ initial: e })} title={e.voucherId ? 'Bút toán từ chứng từ — đã khóa' : 'Sửa / Xóa'} />
                       </td>
                     </tr>
                   ))}
@@ -214,7 +225,10 @@ export default function Cashbook() {
                       {e.type === 'IN' ? <CircleArrowDown className="h-4 w-4" /> : <CircleArrowUp className="h-4 w-4" />}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium text-slate-800 truncate">{e.description}</span>
+                      <span className="block text-sm font-medium text-slate-800 truncate">
+                        {e.voucherNo && <span className="mr-1 font-mono text-[11px] text-amber-800">{e.voucherNo}</span>}
+                        {stripNo(e)}
+                      </span>
                       <span className="block text-xs text-slate-500 truncate">
                         {fmtDate(e.date)}
                         {e.counterparty && ` · ${e.counterparty}`}
