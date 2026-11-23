@@ -852,6 +852,19 @@ function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
           <p className="mt-3 text-xs text-slate-500">
             Hạn mức còn được vay: <Money value={plan.creditAvailable} className="font-medium text-sapphire-700" />
           </p>
+          <p
+            className={cx(
+              'mt-1 flex items-center gap-1 text-xs font-medium',
+              plan.p1CoveredBase ? 'text-slate-500' : plan.p1Covered ? 'text-amber-700' : 'text-rose-700',
+            )}
+          >
+            {plan.p1CoveredBase ? <BadgeCheck className="h-3.5 w-3.5 text-jade-600" /> : <TriangleAlert className="h-3.5 w-3.5" />}
+            {plan.p1CoveredBase
+              ? 'Các khoản P1 đủ tiền từ tiền đang có'
+              : plan.p1Covered
+                ? 'Các khoản P1 phải dùng tiền giải ngân mới đủ'
+                : 'Không đủ tiền cho các khoản P1 bắt buộc'}
+          </p>
           {paidThisMonth.count > 0 && (
             <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
               Kế toán đã chuyển <Money value={paidThisMonth.total} className="font-semibold" /> ({paidThisMonth.count} lệnh chi) trong tháng. Nhớ{' '}
@@ -1558,82 +1571,6 @@ export default function Planner() {
           </ul>
         )}
       </Card>
-
-      {/* ===================== THANH TỔNG KẾT CỐ ĐỊNH ===================== */}
-      <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] lg:bottom-4 z-10 mt-4">
-        <div
-          className={cx(
-            'rounded-2xl border shadow-[0_10px_30px_-10px_rgba(15,23,42,0.35)] backdrop-blur px-4 py-3 sm:px-5',
-            plan.uncovered > 0 ? 'bg-rose-50/95 border-rose-200' : negative ? 'bg-sapphire-50/95 border-sapphire-200' : 'bg-white/95 border-jade-100',
-          )}
-        >
-          <div className="grid grid-cols-3 gap-3 sm:gap-6 items-end">
-            <div className="min-w-0">
-              <p className="text-[11px] sm:text-xs text-slate-500">(1) Tổng có{plan.arIn > 0 && <span className="hidden sm:inline"> + phải thu về</span>}</p>
-              <Money value={plan.baseSources} compact className="sm:hidden text-sm font-semibold text-jade-700" />
-              <Money value={plan.baseSources} className="hidden sm:inline text-lg font-semibold text-jade-700" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] sm:text-xs text-slate-500">(2) Tổng phải chi<span className="hidden sm:inline"> · {plan.selectedCount} khoản</span></p>
-              <Money value={plan.payTotal} compact className="sm:hidden text-sm font-semibold text-vermilion-600" />
-              <Money value={plan.payTotal} className="hidden sm:inline text-lg font-semibold text-vermilion-600" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] sm:text-xs text-slate-500">{negative ? '(3) Cần giải ngân' : '(3) Còn dư'}</p>
-              <Money
-                value={negative ? plan.suggestedDraw : plan.balance}
-                compact
-                className={cx('sm:hidden text-base font-bold', negative ? 'text-sapphire-700' : 'text-jade-600')}
-              />
-              <Money
-                value={negative ? plan.suggestedDraw : plan.balance}
-                className={cx('hidden sm:inline text-2xl font-bold', negative ? 'text-sapphire-700' : 'text-jade-600')}
-              />
-            </div>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            {negative ? (
-              <span className="flex flex-wrap items-center gap-1.5 font-medium text-rose-700">
-                <Landmark className="h-4 w-4" /> Thiếu <Money value={plan.shortfall} className="font-bold" />
-                {plan.drawPlan.length > 0 && (
-                  <>
-                    {' '}
-                    → giải ngân {plan.drawPlan.map((d, i) => (
-                      <span key={d.name + i}>
-                        {i > 0 && ' + '}
-                        {d.name} <Money value={d.amount} className="font-bold" />
-                      </span>
-                    ))}
-                  </>
-                )}
-                {plan.uncovered > 0 && (
-                  <>
-                    {' '}
-                    · vẫn thiếu <Money value={plan.uncovered} className="font-bold" /> khi đã giải ngân hết hạn mức
-                  </>
-                )}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 font-medium text-jade-700">
-                <CircleCheck className="h-4 w-4" /> Đủ tiền chi trả, không cần giải ngân
-              </span>
-            )}
-            {plan.p1CoveredBase ? (
-              <span className="flex items-center gap-1 font-medium text-slate-500">
-                <BadgeCheck className="h-4 w-4 text-jade-600" /> P1 đủ tiền từ tiền đang có
-              </span>
-            ) : plan.p1Covered ? (
-              <span className="flex items-center gap-1 font-medium text-amber-700">
-                <TriangleAlert className="h-4 w-4" /> P1 phải dùng tiền giải ngân mới đủ
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 font-medium text-rose-700">
-                <TriangleAlert className="h-4 w-4" /> KHÔNG đủ tiền cho các khoản P1 bắt buộc!
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
 
       {/* ===================== MODALS ===================== */}
       <AddFixedModal
