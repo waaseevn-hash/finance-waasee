@@ -32,6 +32,8 @@ function ensureListener() {
       for (const k of Object.keys(COMPANY_DEFAULTS)) {
         if (typeof d[k] === 'string' && d[k].trim()) merged[k] = d[k];
       }
+      // Tên mặc định cũ của bản thử nghiệm: coi như chưa khai báo
+      if (merged.companyName.trim() === 'Công ty của tôi') merged.companyName = COMPANY_DEFAULTS.companyName;
       current = merged;
       listeners.forEach((fn) => fn(merged));
     },
