@@ -22,7 +22,7 @@ const coarse = () => typeof window !== 'undefined' && window.matchMedia?.('(poin
  *  - Trên máy tính có thể gõ tắt: 500k, 150tr, 1,5 tỷ.
  *  - Trên điện thoại bật bàn phím số.
  */
-export function MoneyInput({ value, onChange, className = '', showHint = true, placeholder = '0', ...rest }) {
+export function MoneyInput({ value, onChange, className = '', showHint = true, placeholder = '0', unit = true, ...rest }) {
   const [text, setText] = useState(value ? fmtNum(value) : '');
   const [focused, setFocused] = useState(false);
   const numericKeyboard = useMemo(coarse, []);
@@ -65,9 +65,9 @@ export function MoneyInput({ value, onChange, className = '', showHint = true, p
             setText(value ? fmtNum(value) : '');
             rest.onBlur?.(e);
           }}
-          className={cx(inputCls, 'money pr-8 text-right tabular-nums font-medium', className)}
+          className={cx(inputCls, 'money text-right tabular-nums font-medium', unit && 'pr-8', className)}
         />
-        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">₫</span>
+        {unit && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">₫</span>}
       </div>
       {showHint && focused && parsed >= 1000 && (
         <span className="mt-1 block text-right text-xs text-slate-500">≈ {fmtCompact(parsed)}</span>

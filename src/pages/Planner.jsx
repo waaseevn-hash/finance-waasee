@@ -884,13 +884,13 @@ export default function Planner() {
   const candidates = useMemo(() => {
     if (!draft) return [];
     const list = planCandidates({ ap: data.ap, loans: data.loans, banks: data.banks, month, extraAp: draft.extraAp, custom: draft.custom, approvals: data.approvals });
-    if (internal.pending.length || internal.posted.length) {
+    if (internal.pending.length) {
       list.push({
         key: 'internal',
         kind: 'INTERNAL',
         refId: null,
         label: 'Chi tiêu nội bộ đã duyệt',
-        partner: `${internal.pending.length} chứng từ chờ kết xuất${internal.posted.length ? ` · đã kết chuyển ${fmtVND(internal.postedOut)}` : ''}`,
+        partner: `${internal.pending.length} chứng từ chờ kết xuất`,
         dueDate: null,
         outstanding: internal.pendingOut,
         defaultPriority: 'P1',
@@ -1403,6 +1403,10 @@ export default function Planner() {
           onRemove={onRemove}
           supplier={drawerRow.kind === 'AP' ? findSupplier(data.suppliers, { supplierId: drawerRow.supplierId, partnerName: drawerRow.partner }) : null}
           internal={internal}
+          onToggle={onToggle}
+          onAmount={onAmount}
+          onQuick={onQuick}
+          onPriority={onPriority}
         />
       )}
       <SnapshotModal
