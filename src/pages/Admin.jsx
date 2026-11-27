@@ -186,7 +186,7 @@ function CompanyNameEditor() {
 /* ------------------------------ Thành viên & phân quyền ------------------------------ */
 const ROLE_CHOICES = [
   { value: 'STAFF', title: 'Kế toán công nợ', desc: 'Phải thu, phải trả, lệnh chi đã duyệt, danh bạ NCC', icon: Calculator, ring: 'ring-orchid-500 bg-orchid-50', dot: 'bg-orchid-600' },
-  { value: 'CO_OWNER', title: 'Đồng quản trị', desc: 'Toàn quyền dòng tiền, duyệt chi; trừ phân quyền và nhật ký', icon: Crown, ring: 'ring-sapphire-500 bg-sapphire-50', dot: 'bg-sapphire-600' },
+  { value: 'CO_OWNER', title: 'Đồng quản trị', desc: 'Toàn quyền dòng tiền, duyệt chi, phân quyền & nhật ký', icon: Crown, ring: 'ring-sapphire-500 bg-sapphire-50', dot: 'bg-sapphire-600' },
 ];
 const ROLE_TONE = { OWNER: 'dark', CO_OWNER: 'blue', STAFF: 'violet' };
 const isGmailLike = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
@@ -317,7 +317,7 @@ function MemberRow({ m, actor, self }) {
           {!m.active && <Badge tone="red">Đã khóa</Badge>}
         </div>
       </div>
-      {!isOwner && (
+      {!isOwner && !self && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Select value={m.role} onChange={(e) => setRole(e.target.value)} disabled={busy} className="w-auto">
             {ROLE_CHOICES.map((c) => (
@@ -397,8 +397,8 @@ function AccessPanel() {
                   <td className={td}>
                     <Badge tone="blue">Đồng quản trị</Badge>
                   </td>
-                  <td className={td}>Tiền mặt, vay ngân hàng, công nợ, duyệt chi, danh bạ NCC, điều phối tháng</td>
-                  <td className={td}>Phân quyền, nhật ký</td>
+                  <td className={td}>Tiền mặt, vay ngân hàng, công nợ, duyệt chi, danh bạ NCC, điều phối tháng, chứng từ (duyệt, kết chuyển), phân quyền thành viên, nhật ký thao tác</td>
+                  <td className={td}>Sửa / khóa tài khoản Chủ doanh nghiệp; hủy kết chuyển chứng từ; sao lưu & chuyển dữ liệu</td>
                 </tr>
                 <tr>
                   <td className={td}>
@@ -691,7 +691,7 @@ export default function Admin() {
   const [tab, setTab] = useState('access');
   return (
     <div>
-      <PageHeader icon={ShieldCheck} tone="ink" title="Phân quyền & Nhật ký hệ thống" subtitle="Chỉ Chủ doanh nghiệp nhìn thấy trang này" />
+      <PageHeader icon={ShieldCheck} tone="ink" title="Phân quyền & Nhật ký hệ thống" subtitle="Chủ doanh nghiệp và Đồng quản trị" />
       <Tabs
         value={tab}
         onChange={setTab}

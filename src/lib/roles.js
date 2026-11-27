@@ -20,8 +20,8 @@ const PERMS = {
   deletePayments: MANAGERS,
   linkCashbook: MANAGERS,
   approvePayments: MANAGERS, // Duyệt chi công nợ phải trả
-  manageMembers: [ROLES.OWNER],
-  viewAudit: [ROLES.OWNER],
+  manageMembers: MANAGERS, // Thêm / đổi vai trò / khóa / xóa thành viên (không đụng được tài khoản Chủ DN)
+  viewAudit: MANAGERS, // Xem nhật ký thao tác
   deleteSnapshots: [ROLES.OWNER],
   viewVouchers: ALL, // Lập chứng từ thu chi nội bộ (STAFF chỉ thấy chứng từ của mình)
   approveVouchers: MANAGERS, // Duyệt / từ chối chứng từ

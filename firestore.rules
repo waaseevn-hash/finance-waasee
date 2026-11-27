@@ -7,7 +7,8 @@ rules_version = '2';
 //     mới đọc/ghi được dữ liệu. Người lạ có link cũng không thấy gì.
 //  2. Vai trò:
 //       OWNER    : toàn quyền + quản lý thành viên + xem nhật ký
-//       CO_OWNER : toàn quyền dòng tiền, duyệt chi
+//       CO_OWNER : toàn quyền dòng tiền, duyệt chi, quản lý thành viên
+//                  (trừ tài khoản OWNER), xem nhật ký
 //       STAFF    : CHỈ công nợ phải thu / phải trả (thêm, sửa, xóa), danh bạ NCC,
 //                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt
 //  3. Nhật ký bắt buộc: mọi thay đổi số liệu phải kèm 1 dòng
@@ -224,8 +225,8 @@ service cloud.firestore {
         && request.resource.data.email == email
         && request.resource.data.role == 'OWNER'
         && request.resource.data.active == true;
-      // Chủ doanh nghiệp cấp quyền cho người khác (không thể tạo thêm OWNER)
-      allow create: if isOwner()
+      // Chủ DN / Đồng quản trị cấp quyền cho người khác (không thể tạo thêm OWNER)
+      allow create: if isManager()
         && email == email.lower()
         && email != myEmail()
         && validMember(email)
@@ -237,12 +238,12 @@ service cloud.firestore {
         && resource.data.active == true
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastSeenAt']);
       // Không ai sửa / khóa / xóa được tài khoản OWNER qua ứng dụng
-      allow update: if isOwner()
+      allow update: if isManager()
         && email != myEmail()
         && resource.data.role != 'OWNER'
         && validMember(email)
         && audited('members/' + email, 'UPDATE');
-      allow delete: if isOwner()
+      allow delete: if isManager()
         && email != myEmail()
         && resource.data.role != 'OWNER'
         && auditedDelete('members', email);
@@ -494,14 +495,14 @@ service cloud.firestore {
     // Cài đặt: tên doanh nghiệp (mọi thành viên đọc, Chủ DN sửa); mẫu chi cố định (OWNER / CO_OWNER)
     match /settings/{key} {
       allow read: if (key == 'company' && isMember()) || isManager();
-      allow write: if (key == 'company' && isOwner()) || (key != 'company' && isManager());
+      allow write: if isManager();
     }
 
     // =================================================================
     //  NHẬT KÝ THAO TÁC — chỉ thêm, không ai sửa / xóa được
     // =================================================================
     match /audit_logs/{logId} {
-      allow read: if isOwner();
+      allow read: if isManager();
       allow create: if isMember()
         && request.resource.data.actorEmail == myEmail()
         && request.resource.data.at == request.time
@@ -512,7 +513,8 @@ service cloud.firestore {
     }
     // Nhật ký cũ chuyển từ bản claude.ai: chỉ Chủ DN đọc / nhập, không sửa / xóa
     match /audit_archive/{logId} {
-      allow read, create: if isOwner();
+      allow read: if isManager();
+      allow create: if isOwner();
       allow update, delete: if false;
     }
   }
