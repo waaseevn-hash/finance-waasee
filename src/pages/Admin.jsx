@@ -403,8 +403,8 @@ function AccessPanel() {
                   <td className={td}>
                     <Badge tone="violet">Kế toán công nợ</Badge>
                   </td>
-                  <td className={td}>Phải thu / phải trả, lệnh chi đã duyệt → đã chuyển tiền, danh bạ nhà cung cấp</td>
-                  <td className={td}>Két tiền mặt, ngân hàng, điều phối tháng, duyệt chi, phân quyền, nhật ký; không xóa công nợ</td>
+                  <td className={td}>Phải thu / phải trả (thêm, sửa, xóa khoản công nợ), lệnh chi đã duyệt → đã chuyển tiền, danh bạ nhà cung cấp, lập chứng từ</td>
+                  <td className={td}>Két tiền mặt, ngân hàng, điều phối tháng, duyệt chi, phân quyền, nhật ký; xóa lẻ từng lần thanh toán, xóa nhà cung cấp</td>
                 </tr>
               </tbody>
             </table>

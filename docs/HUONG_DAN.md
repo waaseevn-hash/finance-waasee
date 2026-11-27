@@ -21,7 +21,7 @@ Chủ doanh nghiệp vào **Phân quyền & Nhật ký → Thành viên & phân 
 |---|---|
 | Chủ doanh nghiệp | Toàn bộ, duyệt chi, phân quyền, nhật ký |
 | Đồng quản trị | Tiền mặt, vay ngân hàng, công nợ, duyệt chi, danh bạ NCC, điều phối tháng |
-| Kế toán công nợ | Phải thu / phải trả, lệnh chi đã duyệt → đã chuyển tiền, danh bạ NCC (không xóa công nợ) |
+| Kế toán công nợ | Phải thu / phải trả (thêm, sửa, xóa khoản công nợ), lệnh chi đã duyệt → đã chuyển tiền, danh bạ NCC; không xóa lẻ lần thanh toán, không xóa NCC |
 
 ## 3. Chuyển dữ liệu từ bản claude.ai (làm một lần)
 

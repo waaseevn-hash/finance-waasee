@@ -519,16 +519,24 @@ export function HistoryModal({ open, onClose, kind, debt }) {
 
 
 /** Xóa một khoản công nợ cùng lịch sử thanh toán của nó */
+/**
+ * Xóa một khoản công nợ kèm toàn bộ lịch sử thanh toán.
+ * Lô đầu: xóa công nợ + tối đa 4 lần thanh toán; các lô sau xóa nốt lịch sử (5 dòng / lô — giới hạn
+ * số lần kiểm tra của Security Rules). Kế toán được xóa lịch sử thanh toán chỉ khi công nợ gốc đã bị xóa
+ * cùng lúc hoặc trước đó, nên không thể xóa lẻ từng lần thanh toán.
+ */
 export async function deleteDebt(actor, kind, r) {
   const cfg = KIND[kind];
   const snap = await getDocs(query(collection(db, C.payments), where('parentId', '==', r.id)));
   const pays = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  for (let i = 0; i < pays.length; i += 5) {
+  const note = (p) => `Xóa lịch sử thanh toán ${fmtVND(p.amount)} (kèm xóa công nợ ${r.partnerName})`;
+  const first = new AuditedBatch(actor);
+  first.remove(cfg.coll, r.id, raw(r), `Xóa công nợ ${cfg.name}: ${r.partnerName} — ${fmtVND(r.total)}`);
+  pays.slice(0, 4).forEach((p) => first.remove(C.payments, p.id, p, note(p)));
+  await first.commit();
+  for (let i = 4; i < pays.length; i += 5) {
     const pb = new AuditedBatch(actor);
-    pays.slice(i, i + 5).forEach((p) => pb.remove(C.payments, p.id, p, `Xóa lịch sử thanh toán ${fmtVND(p.amount)} (kèm xóa công nợ ${r.partnerName})`));
+    pays.slice(i, i + 5).forEach((p) => pb.remove(C.payments, p.id, p, note(p)));
     await pb.commit();
   }
-  const b = new AuditedBatch(actor);
-  b.remove(cfg.coll, r.id, raw(r), `Xóa công nợ ${cfg.name}: ${r.partnerName} — ${fmtVND(r.total)}`);
-  await b.commit();
 }

@@ -547,7 +547,7 @@ function DebtPanel({ kind, opts, onClose }) {
                   <Button size="xs" icon={Pencil} onClick={() => setDebtModal({ initial: raw(r) })}>
                     Sửa
                   </Button>
-                  {can(role, 'deletePartners') && <Button size="xs" variant="dangerGhost" icon={Trash2} onClick={() => remove(r)} />}
+                  {can(role, 'deleteDebts') && <Button size="xs" variant="dangerGhost" icon={Trash2} onClick={() => remove(r)} />}
                 </div>
               </li>
             );

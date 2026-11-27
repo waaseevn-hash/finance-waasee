@@ -30,7 +30,7 @@ import { CERTAINTY, PAY_METHOD, PRIORITY } from '../lib/constants.js';
 import { can } from '../lib/roles.js';
 import { downloadXlsx } from '../lib/xlsx.js';
 import { Who } from '../components/Who.jsx';
-import { DebtModal, HistoryModal, KIND, PaymentModal, raw } from '../components/forms/debtForms.jsx';
+import { DebtModal, HistoryModal, KIND, PaymentModal, deleteDebt, raw } from '../components/forms/debtForms.jsx';
 import { SUPPLIER_KEYS, SupplierCard, SupplierInfo, SupplierModal, findSupplier, pickSupplier } from '../components/forms/supplierForms.jsx';
 import { useQuick } from '../components/QuickPanels.jsx';
 import { ApprovalBadge, PayOrdersPanel, useApprovalFlow } from '../components/forms/approvalForms.jsx';
@@ -118,17 +118,7 @@ export default function Partners({ params, navigate }) {
     });
     if (!ok) return;
     try {
-      const snap = await getDocs(query(collection(db, C.payments), where('parentId', '==', r.id)));
-      const pays = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // Xóa lịch sử thanh toán theo từng lô nhỏ (giới hạn số lần kiểm tra của Security Rules mỗi lô)
-      for (let i = 0; i < pays.length; i += 5) {
-        const pb = new AuditedBatch(actor);
-        pays.slice(i, i + 5).forEach((p) => pb.remove(C.payments, p.id, p, `Xóa lịch sử thanh toán ${fmtVND(p.amount)} (kèm xóa công nợ ${r.partnerName})`));
-        await pb.commit();
-      }
-      const b = new AuditedBatch(actor);
-      b.remove(cfg.coll, r.id, raw(r), `Xóa công nợ ${cfg.name}: ${r.partnerName} — ${fmtVND(r.total)}`);
-      await b.commit();
+      await deleteDebt(actor, kind, r);
       toast.success('Đã xóa công nợ');
     } catch (ex) {
       toast.error(friendlyError(ex));
@@ -357,7 +347,7 @@ export default function Partners({ params, navigate }) {
                           ))}
                         <Button size="iconSm" variant="ghost" icon={History} onClick={() => setHistDebt(raw(r))} title="Lịch sử thanh toán" />
                         <Button size="iconSm" variant="ghost" icon={Pencil} onClick={() => setDebtModal({ initial: raw(r) })} title="Sửa" />
-                        {can(role, 'deletePartners') && <Button size="iconSm" variant="ghost" icon={Trash2} onClick={() => removeDebt(r)} title="Xóa" />}
+                        {can(role, 'deleteDebts') && <Button size="iconSm" variant="ghost" icon={Trash2} onClick={() => removeDebt(r)} title="Xóa" />}
                       </td>
                     </tr>
                   ))}
@@ -432,7 +422,7 @@ export default function Partners({ params, navigate }) {
                     <Button size="xs" icon={Pencil} onClick={() => setDebtModal({ initial: raw(r) })}>
                       Sửa
                     </Button>
-                    {can(role, 'deletePartners') && <Button size="xs" variant="dangerGhost" icon={Trash2} onClick={() => removeDebt(r)} />}
+                    {can(role, 'deleteDebts') && <Button size="xs" variant="dangerGhost" icon={Trash2} onClick={() => removeDebt(r)} />}
                   </div>
                 </li>
               ))}
@@ -471,7 +461,10 @@ function SettlementSummary({ kind, list, loaded, action }) {
     );
   }, [month]);
   const t = useMemo(() => debtTotals(list), [list]);
-  const m = useMemo(() => paymentTotals(pays || [], ar ? 'AR' : 'AP'), [pays, ar]);
+  const m = useMemo(() => {
+    const ids = new Set(list.map((r) => r.id));
+    return paymentTotals((pays || []).filter((p) => ids.has(p.parentId)), ar ? 'AR' : 'AP');
+  }, [pays, ar, list]);
   const word = ar ? 'thu' : 'trả';
   const bar = ar ? 'bg-jade-500' : 'bg-vermilion-500';
   const paidTone = ar ? 'text-jade-700' : 'text-vermilion-600';

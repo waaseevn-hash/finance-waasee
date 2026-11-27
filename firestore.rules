@@ -8,7 +8,7 @@ rules_version = '2';
 //  2. Vai trò:
 //       OWNER    : toàn quyền + quản lý thành viên + xem nhật ký
 //       CO_OWNER : toàn quyền dòng tiền, duyệt chi
-//       STAFF    : CHỈ công nợ phải thu / phải trả, danh bạ NCC,
+//       STAFF    : CHỈ công nợ phải thu / phải trả (thêm, sửa, xóa), danh bạ NCC,
 //                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt
 //  3. Nhật ký bắt buộc: mọi thay đổi số liệu phải kèm 1 dòng
 //     audit_logs tạo CÙNG LÚC, đúng tài liệu, đúng hành động, đúng
@@ -198,6 +198,12 @@ service cloud.firestore {
       return ['auto', 'requestedBy', 'createdBy', 'postingBatchId', 'postedOn', 'postedBy', 'entries', 'cashEntryIds', 'generatedIds', 'settledAmount'];
     }
 
+    // Công nợ gốc của một lần thanh toán không còn (bị xóa trong cùng lô hoặc trước đó)
+    function debtGone(d) {
+      return (d.kind == 'AR' && !existsAfter(/databases/$(database)/documents/receivables/$(d.parentId)))
+        || (d.kind == 'AP' && !existsAfter(/databases/$(database)/documents/payables/$(d.parentId)));
+    }
+
     function validMember(email) {
       let d = request.resource.data;
       return d.email == email
@@ -285,7 +291,7 @@ service cloud.firestore {
         && audited('receivables/' + id, 'CREATE');
       allow update: if isStaffOrAbove() && validReceivable(request.resource.data) && keepsCreator()
         && audited('receivables/' + id, 'UPDATE');
-      allow delete: if isManager() && auditedDelete('receivables', id);
+      allow delete: if isStaffOrAbove() && auditedDelete('receivables', id);
     }
 
     match /payables/{id} {
@@ -294,16 +300,18 @@ service cloud.firestore {
         && audited('payables/' + id, 'CREATE');
       allow update: if isStaffOrAbove() && validPayable(request.resource.data) && keepsCreator()
         && audited('payables/' + id, 'UPDATE');
-      allow delete: if isManager() && auditedDelete('payables', id);
+      allow delete: if isStaffOrAbove() && auditedDelete('payables', id);
     }
 
-    // Lịch sử thanh toán từng đợt: không sửa, chỉ thêm / xóa (xóa: OWNER / CO_OWNER)
+    // Lịch sử thanh toán từng đợt: không sửa, chỉ thêm / xóa.
+    // Xóa lẻ: OWNER / CO_OWNER. Kế toán chỉ xóa được khi công nợ gốc bị xóa cùng lúc (hoặc đã xóa trước).
     match /payments/{id} {
       allow read: if isStaffOrAbove();
       allow create: if isStaffOrAbove() && validPayment(request.resource.data) && createdByMe()
         && audited('payments/' + id, 'CREATE');
       allow update: if false;
-      allow delete: if isManager() && auditedDelete('payments', id);
+      allow delete: if (isManager() || (isStaffOrAbove() && debtGone(resource.data)))
+        && auditedDelete('payments', id);
     }
 
     match /partners/{id} {

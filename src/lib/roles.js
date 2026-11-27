@@ -15,7 +15,8 @@ const PERMS = {
   viewTreasury: MANAGERS, // Tiền mặt két, Vay ngân hàng, Bảng điều phối
   viewPartners: ALL, // Công nợ phải thu / phải trả
   editPartners: ALL,
-  deletePartners: MANAGERS,
+  deletePartners: MANAGERS, // Xóa nhà cung cấp trong danh bạ
+  deleteDebts: ALL, // Xóa khoản công nợ phải thu / phải trả (kèm lịch sử thanh toán) — cả Kế toán
   deletePayments: MANAGERS,
   linkCashbook: MANAGERS,
   approvePayments: MANAGERS, // Duyệt chi công nợ phải trả
