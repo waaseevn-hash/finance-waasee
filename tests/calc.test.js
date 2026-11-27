@@ -248,3 +248,22 @@ test('nguồn khả dụng có / không gộp hạn mức vay', () => {
   assert.equal(on.balanceAvailable, 800);
   assert.equal(on.suggestedDraw, 200);
 });
+
+test('tổng đã thu / đã trả và các lần thanh toán trong kỳ', async () => {
+  const { debtTotals, paymentTotals } = await import('../src/lib/calc.js');
+  const t = debtTotals([
+    { total: 1000, paid: 400 },
+    { total: 500, paid: 500 },
+    { total: 300 },
+  ]);
+  assert.deepEqual(t, { count: 3, open: 2, done: 1, total: 1800, paid: 900, remain: 900, pct: 50 });
+  const p = paymentTotals(
+    [
+      { kind: 'AR', amount: 200, method: 'CASH' },
+      { kind: 'AR', amount: 300, method: 'BANK' },
+      { kind: 'AP', amount: 999, method: 'BANK' },
+    ],
+    'AR',
+  );
+  assert.deepEqual(p, { total: 500, count: 2, byMethod: { CASH: 200, BANK: 300, OTHER: 0 } });
+});

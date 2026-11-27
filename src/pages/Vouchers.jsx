@@ -21,16 +21,17 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { can } from '../lib/roles.js';
 import { friendlyError } from '../lib/db.js';
-import { daysBetween, fmtDate, todayISO } from '../lib/dates.js';
+import { currentMonth, daysBetween, fmtDate, monthLabel, todayISO } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
 import { cashBalance } from '../lib/calc.js';
 import { useCompany } from '../lib/brand.js';
-import { VSTATUS, VTYPE, advanceRemaining, cashEffect, ledgerLines, openAdvances, voucherAmount } from '../lib/vouchers.js';
+import { VSTATUS, VTYPE, advanceRemaining, cashEffect, ledgerLines, openAdvances, voucherAmount, voucherStats } from '../lib/vouchers.js';
 import { approveVouchers, postVouchers } from '../lib/voucherService.js';
 import { downloadBatchXlsx } from '../lib/voucherExcel.js';
 import { useToast } from '../components/feedback.jsx';
 import { Money } from '../components/Money.jsx';
-import { Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select, Tabs, cx } from '../components/ui.jsx';
+import { Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, MonthPicker, PageHeader, Segmented, Select, Tabs, cx } from '../components/ui.jsx';
+import { Figure, MiniStat } from '../components/Figure.jsx';
 import { Who } from '../components/Who.jsx';
 import { TYPE_ICON, TYPE_STYLE, VStatusBadge, VTypeChip } from '../components/vouchers/common.jsx';
 import { VoucherEditor } from '../components/vouchers/VoucherEditor.jsx';
@@ -111,6 +112,103 @@ function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
   );
 }
 
+/** Số liệu tháng: tổng thu, tổng chi, chênh lệch + các việc đang chờ */
+function VoucherSummary({ stats, month, setMonth, manager, ready, onGo }) {
+  const s = stats;
+  const parts = [
+    ['Tạm ứng', s.outByType.TU],
+    ['Thanh toán', s.outByType.TT],
+    ['Phiếu chi', s.outByType.PC],
+  ].filter(([, v]) => v > 0);
+  return (
+    <Card className="mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 pt-4">
+        <div>
+          <p className="font-display text-base font-bold text-ink-900">Số liệu {monthLabel(month).toLowerCase()}</p>
+          <p className="text-xs text-slate-500">{manager ? 'Chứng từ đã kết chuyển, tính theo ngày tiền ra / vào két' : 'Chứng từ của tôi đã kết chuyển'}</p>
+        </div>
+        <MonthPicker value={month} onChange={setMonth} />
+      </div>
+      <div className="grid grid-cols-3 gap-3 sm:gap-6 px-4 sm:px-5 pt-4 pb-3">
+        <Figure label="Tổng thu" value={ready ? s.cashIn : 0} tone="text-jade-700" sub={`${s.receipts} chứng từ`} />
+        <Figure label="Tổng chi" value={ready ? s.cashOut : 0} tone="text-vermilion-600" sub={`${s.payments} chứng từ`} />
+        <Figure
+          label={
+            <>
+              <span className="sm:hidden">Thu − chi</span>
+              <span className="hidden sm:inline">Chênh lệch thu − chi</span>
+            </>
+          }
+          value={ready ? s.net : 0}
+          sign
+          tone={s.net < 0 ? 'text-rose-600' : 'text-ink-900'}
+          sub={<span className="hidden sm:inline">tiền mặt qua chứng từ</span>}
+          align="right"
+        />
+      </div>
+      {parts.length > 0 && (
+        <p className="px-4 sm:px-5 pb-3 text-xs text-slate-500">
+          Chi gồm{' '}
+          {parts.map(([k, v], i) => (
+            <span key={k}>
+              {i > 0 && ' · '}
+              {k} <Money value={v} className="font-medium text-slate-700" />
+            </span>
+          ))}
+          {s.inByType.TT > 0 && (
+            <>
+              {' '}
+              — thu hoàn ứng <Money value={s.inByType.TT} className="font-medium text-slate-700" />
+            </>
+          )}
+        </p>
+      )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-slate-100 border-t border-slate-100">
+        <MiniStat label="Chi phí đã ghi nhận" value={<Money value={s.expense} />} sub="theo TK chi phí (15x, 6xx, 8xx)" />
+        <MiniStat
+          label="Chờ duyệt"
+          value={`${s.pendingCount} chứng từ`}
+          sub={s.pendingCount ? <Money value={s.pendingAmount} /> : 'không có'}
+          tone={s.pendingCount ? 'text-amber-700' : 'text-slate-400'}
+          onClick={s.pendingCount ? () => onGo(manager ? 'pending' : 'all') : undefined}
+        />
+        <MiniStat
+          label="Đã duyệt, chờ kết chuyển"
+          value={`${s.approvedCount} chứng từ`}
+          sub={
+            s.approvedCount ? (
+              <>
+                {s.approvedOut > 0 && (
+                  <>
+                    chi <Money value={s.approvedOut} />
+                  </>
+                )}
+                {s.approvedOut > 0 && s.approvedIn > 0 && ' · '}
+                {s.approvedIn > 0 && (
+                  <>
+                    thu <Money value={s.approvedIn} />
+                  </>
+                )}
+              </>
+            ) : (
+              'không có'
+            )
+          }
+          tone={s.approvedCount ? 'text-sapphire-700' : 'text-slate-400'}
+          onClick={s.approvedCount && manager ? () => onGo('post') : undefined}
+        />
+        <MiniStat
+          label="Tạm ứng chưa quyết toán"
+          value={<Money value={s.advanceOpen} />}
+          sub={s.advanceCount ? `${s.advanceCount} giấy · ${s.advancePeople} người` : 'không có'}
+          tone={s.advanceOpen ? 'text-amber-700' : 'text-slate-400'}
+          onClick={s.advanceCount ? () => onGo('advances') : undefined}
+        />
+      </div>
+    </Card>
+  );
+}
+
 export default function Vouchers({ params }) {
   const { actor, role, me } = useAuth();
   const data = useData();
@@ -158,6 +256,13 @@ export default function Vouchers({ params }) {
   const approved = useMemo(() => all.filter((v) => v.status === 'APPROVED' && !v.auto).sort((a, b) => (a.date || '').localeCompare(b.date || '')), [all]);
   const advances = useMemo(() => openAdvances(all), [all]);
   const batches = useMemo(() => [...(data.batches || [])].sort((a, b) => (b.code || '').localeCompare(a.code || '')), [data.batches]);
+  const [statMonth, setStatMonth] = useState(currentMonth());
+  const stats = useMemo(() => voucherStats(all, statMonth), [all, statMonth]);
+  const goTab = (t) => {
+    setTab(t);
+    if (t === 'all') setStatusFilter('PENDING');
+    document.getElementById('voucher-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const filtered = useMemo(
     () =>
@@ -291,6 +396,8 @@ export default function Vouchers({ params }) {
         </div>
       )}
 
+      <VoucherSummary stats={stats} month={statMonth} setMonth={setStatMonth} manager={manager} ready={!!data.vouchersReady} onGo={goTab} />
+
       {/* Bốn cuốn chứng từ để lập nhanh */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         {PADS.map((p) => {
@@ -317,7 +424,7 @@ export default function Vouchers({ params }) {
       </div>
 
       <Card>
-        <div className="px-2 sm:px-3 pt-1">
+        <div id="voucher-tabs" className="px-2 sm:px-3 pt-1 scroll-mt-24">
           <Tabs value={activeTab} onChange={setTab} tabs={tabs.map((t) => ({ ...t, activeClass: 'border-amber-600 text-ink-900', iconClass: activeTab === t.value ? 'text-amber-600' : '' }))} />
         </div>
 

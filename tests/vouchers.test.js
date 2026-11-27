@@ -131,3 +131,29 @@ test('bảng kê đợt: mỗi bút toán tiền mặt chỉ một dòng; mẫu 
   const bytes = buildXlsx(buildBatchSheets({ batch: p.batch, docs: p.docs, company }));
   assert.ok(bytes.length > 1000);
 });
+
+test('số liệu tháng của chứng từ: thu, chi, chi phí, chờ duyệt', async () => {
+  const { voucherStats } = await import('../src/lib/vouchers.js');
+  const list = [
+    { type: 'PT', status: 'POSTED', amount: 5e6, date: '2026-11-03', entries: [{ debit: '1111', credit: '131', amount: 5e6 }] },
+    { type: 'PC', status: 'POSTED', amount: 2e6, date: '2026-11-04', entries: [{ debit: '642', credit: '1111', amount: 2e6 }] },
+    { type: 'TU', status: 'POSTED', amount: 3e6, settledAmount: 0, date: '2026-10-30', postedOn: '2026-11-01', entries: [{ debit: '141', credit: '1111', amount: 3e6 }], person: 'An', no: 'TU-1' },
+    { type: 'TT', status: 'POSTED', items: [{ qty: 1, price: 1e6 }], advanceAmount: 1.5e6, date: '2026-11-10', postedOn: '2026-11-10', entries: [{ debit: '642', credit: '141', amount: 1e6 }, { debit: '1111', credit: '141', amount: 5e5 }] },
+    { type: 'PC', status: 'POSTED', auto: true, amount: 3e6, date: '2026-11-01' },
+    { type: 'PC', status: 'POSTED', amount: 9e6, date: '2026-10-20', entries: [] },
+    { type: 'PC', status: 'PENDING', amount: 7e5, date: '2026-11-20' },
+    { type: 'PT', status: 'APPROVED', amount: 4e5, date: '2026-11-21' },
+  ];
+  const s = voucherStats(list, '2026-11');
+  assert.equal(s.cashIn, 5e6 + 5e5);
+  assert.equal(s.cashOut, 2e6 + 3e6);
+  assert.equal(s.net, 5.5e6 - 5e6);
+  assert.equal(s.expense, 3e6);
+  assert.equal(s.receipts, 2);
+  assert.equal(s.payments, 2);
+  assert.deepEqual(s.outByType, { TU: 3e6, TT: 0, PC: 2e6 });
+  assert.equal(s.pendingCount, 1);
+  assert.equal(s.pendingAmount, 7e5);
+  assert.equal(s.approvedIn, 4e5);
+  assert.equal(s.advanceOpen, 3e6);
+});

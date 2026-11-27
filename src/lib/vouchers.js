@@ -457,3 +457,65 @@ export function ledgerLines(docs) {
   }
   return lines;
 }
+
+/** Ngày tiền thực sự ra / vào quỹ của chứng từ đã kết chuyển */
+export function cashDateOf(v) {
+  return v.type === 'PT' || v.type === 'PC' ? v.date : v.postedOn || v.date;
+}
+
+const EXPENSE_ACCOUNT = /^(15|6|8)/;
+
+/**
+ * Số liệu chứng từ của một tháng (chỉ tính chứng từ gốc đã kết chuyển; phiếu tự động không cộng lại):
+ *   thu / chi tiền mặt, chi phí đã ghi nhận (TK đầu 15x, 6xx, 8xx), chi theo loại chứng từ;
+ *   cùng các số liệu hiện thời: chờ duyệt, chờ kết chuyển, tạm ứng chưa quyết toán.
+ */
+export function voucherStats(vouchers = [], month) {
+  const own = vouchers.filter((v) => !v.auto);
+  const posted = own.filter((v) => v.status === 'POSTED' && String(cashDateOf(v) || '').slice(0, 7) === month);
+  let cashIn = 0;
+  let cashOut = 0;
+  let receipts = 0;
+  let payments = 0;
+  let expense = 0;
+  const outByType = { TU: 0, TT: 0, PC: 0 };
+  const inByType = { PT: 0, TT: 0 };
+  for (const v of posted) {
+    const e = cashEffect(v);
+    if (e.in > 0) {
+      receipts += 1;
+      cashIn += e.in;
+      inByType[v.type === 'TT' ? 'TT' : 'PT'] += e.in;
+    }
+    if (e.out > 0) {
+      payments += 1;
+      cashOut += e.out;
+      if (outByType[v.type] !== undefined) outByType[v.type] += e.out;
+    }
+    for (const en of v.entries || []) if (EXPENSE_ACCOUNT.test(String(en.debit))) expense += Math.round(Number(en.amount) || 0);
+  }
+  const pending = own.filter((v) => v.status === 'PENDING');
+  const approved = own.filter((v) => v.status === 'APPROVED');
+  const adv = openAdvances(vouchers);
+  return {
+    month,
+    postedCount: posted.length,
+    cashIn,
+    cashOut,
+    net: cashIn - cashOut,
+    receipts,
+    payments,
+    expense,
+    outByType,
+    inByType,
+    pendingCount: pending.length,
+    pendingAmount: pending.reduce((s, v) => s + voucherAmount(v), 0),
+    approvedCount: approved.length,
+    approvedIn: approved.reduce((s, v) => s + cashEffect(v).in, 0),
+    approvedOut: approved.reduce((s, v) => s + cashEffect(v).out, 0),
+    advanceOpen: adv.reduce((s, v) => s + advanceRemaining(v), 0),
+    advanceCount: adv.length,
+    advancePeople: new Set(adv.map((v) => v.person)).size,
+    rejectedCount: own.filter((v) => v.status === 'REJECTED').length,
+  };
+}

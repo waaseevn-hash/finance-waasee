@@ -23,8 +23,8 @@ import { db } from '../lib/firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../lib/db.js';
-import { apSummary, arSummary, remaining, tsMillis } from '../lib/calc.js';
-import { daysBetween, describeDays, fmtDate, todayISO } from '../lib/dates.js';
+import { apSummary, arSummary, debtTotals, paymentTotals, remaining, tsMillis } from '../lib/calc.js';
+import { currentMonth, daysBetween, describeDays, fmtDate, monthLabel, monthRange, todayISO } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
 import { CERTAINTY, PAY_METHOD, PRIORITY } from '../lib/constants.js';
 import { can } from '../lib/roles.js';
@@ -36,6 +36,7 @@ import { useQuick } from '../components/QuickPanels.jsx';
 import { ApprovalBadge, PayOrdersPanel, useApprovalFlow } from '../components/forms/approvalForms.jsx';
 import { openPayOrders } from '../lib/approvals.js';
 import { Money, MoneyInput } from '../components/Money.jsx';
+import { Figure } from '../components/Figure.jsx';
 import { useConfirm, useToast } from '../components/feedback.jsx';
 import {
   Badge,
@@ -46,6 +47,7 @@ import {
   Field,
   Input,
   Modal,
+  MonthPicker,
   PageHeader,
   StatTile,
   Segmented,
@@ -101,6 +103,9 @@ export default function Partners({ params, navigate }) {
     [list, status, level, q, today, cfg],
   );
 
+  // Cộng các dòng đang hiển thị (theo bộ lọc)
+  const footer = useMemo(() => debtTotals(rows), [rows]);
+
   // Lấy bản ghi mới nhất (realtime) cho các modal đang mở
   const fresh = (d) => (d ? list.find((x) => x.id === d.id) || d : null);
 
@@ -147,6 +152,13 @@ export default function Partners({ params, navigate }) {
             cfg.levels[r[cfg.levelField] || cfg.defaultLevel]?.label || '',
             r.note || '',
           ]),
+          [
+            `Cộng ${rows.length} khoản`,
+            '',
+            { f: `SUM(C2:C${rows.length + 1})`, v: footer.total, s: 'moneyBold' },
+            { f: `SUM(D2:D${rows.length + 1})`, v: footer.paid, s: 'moneyBold' },
+            { f: `SUM(E2:E${rows.length + 1})`, v: footer.remain, s: 'moneyBold' },
+          ],
         ],
       },
     ]);
@@ -230,8 +242,15 @@ export default function Partners({ params, navigate }) {
         <SupplierDirectory suppliers={suppliers} ap={ap} onEdit={(s) => setSupplierModal({ initial: s })} onAdd={() => setSupplierModal({})} />
       ) : (
       <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 my-5">
-        {tiles.map(([label, v, tone, variant, Icon, filter]) => (
+      <SettlementSummary
+        kind={kind}
+        list={list}
+        loaded={!!loaded[kind]}
+        action={{ label: kind === 'ar' ? 'Thu tiền / thêm khoản' : can(role, 'approvePayments') ? 'Duyệt chi / thêm khoản' : 'Xem / thêm khoản', onClick: () => quick.open(kind, { filter: 'all' }) }}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 my-5">
+        {tiles.slice(1).map(([label, v, tone, variant, Icon, filter]) => (
           <StatTile
             key={label}
             tone={tone}
@@ -343,8 +362,38 @@ export default function Partners({ params, navigate }) {
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t-2 border-slate-200 bg-slate-50/80">
+                  <tr>
+                    <td className={cx(td, 'font-semibold text-ink-900')}>Cộng {rows.length} khoản</td>
+                    <td className={cx(td, 'text-right')}>
+                      <Money value={footer.total} className="font-semibold text-ink-900" />
+                    </td>
+                    <td className={cx(td, 'text-right')}>
+                      <Money value={footer.paid} className={cx('font-semibold', kind === 'ar' ? 'text-jade-700' : 'text-vermilion-600')} />
+                    </td>
+                    <td className={cx(td, 'text-right')}>
+                      <Money value={footer.remain} className={cx('font-bold', kind === 'ar' ? 'text-emerald-700' : 'text-orange-600')} />
+                    </td>
+                    <td className={td} colSpan={3} />
+                  </tr>
+                </tfoot>
               </table>
             </TableWrap>
+
+            <div className="md:hidden grid grid-cols-3 gap-2 border-b border-slate-100 bg-slate-50/80 px-4 py-2.5 text-[11px] text-slate-500">
+              <span>
+                Tổng {rows.length} khoản
+                <Money value={footer.total} compact className="block text-sm font-semibold text-ink-900" />
+              </span>
+              <span>
+                {cfg.paidLabel}
+                <Money value={footer.paid} compact className={cx('block text-sm font-semibold', kind === 'ar' ? 'text-jade-700' : 'text-vermilion-600')} />
+              </span>
+              <span className="text-right">
+                {cfg.remainLabel}
+                <Money value={footer.remain} compact className={cx('block text-sm font-bold', kind === 'ar' ? 'text-emerald-700' : 'text-orange-600')} />
+              </span>
+            </div>
 
             <ul className="md:hidden divide-y divide-slate-100">
               {rows.map((r) => (
@@ -400,6 +449,87 @@ export default function Partners({ params, navigate }) {
       {flow.modals}
       <HistoryModal open={!!histDebt} onClose={() => setHistDebt(null)} kind={kind} debt={fresh(histDebt) && raw(fresh(histDebt))} />
     </div>
+  );
+}
+
+/* ----------------------------- Tổng hợp đã thu / đã trả ----------------------------- */
+/**
+ * Lũy kế: tổng giá trị công nợ – đã thu (trả) – còn lại, kèm thanh tiến độ.
+ * Trong tháng: tổng các lần thu (trả) theo ngày thanh toán, chia tiền mặt / chuyển khoản.
+ */
+function SettlementSummary({ kind, list, loaded, action }) {
+  const ar = kind === 'ar';
+  const [month, setMonth] = useState(currentMonth());
+  const [pays, setPays] = useState(null);
+  useEffect(() => {
+    const { start, end } = monthRange(month);
+    setPays(null);
+    return onSnapshot(
+      query(collection(db, C.payments), where('date', '>=', start), where('date', '<=', end)),
+      (snap) => setPays(snap.docs.map((d) => d.data())),
+      () => setPays([]),
+    );
+  }, [month]);
+  const t = useMemo(() => debtTotals(list), [list]);
+  const m = useMemo(() => paymentTotals(pays || [], ar ? 'AR' : 'AP'), [pays, ar]);
+  const word = ar ? 'thu' : 'trả';
+  const bar = ar ? 'bg-jade-500' : 'bg-vermilion-500';
+  const paidTone = ar ? 'text-jade-700' : 'text-vermilion-600';
+  return (
+    <Card className="mt-5 p-4 sm:p-5">
+      <div className="grid grid-cols-3 gap-3 sm:gap-6">
+        <Figure
+          label={
+            <>
+              Tổng phải {word}
+              <span className="hidden sm:inline"> (lũy kế)</span>
+            </>
+          }
+          value={t.total}
+          sub={`${t.count} khoản`}
+        />
+        <Figure
+          label={`Đã ${word}`}
+          value={t.paid}
+          tone={paidTone}
+          sub={
+            <>
+              đạt {t.pct.toLocaleString('vi-VN')}%<span className="hidden sm:inline"> · {t.done} khoản xong</span>
+            </>
+          }
+        />
+        <Figure label={`Còn phải ${word}`} value={t.remain} tone={ar ? 'text-emerald-700' : 'text-orange-600'} sub={`${t.open} khoản còn nợ`} align="right" />
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuenow={t.pct} aria-valuemin={0} aria-valuemax={100} aria-label={`Đã ${word} ${t.pct}%`}>
+        <div className={cx('h-full rounded-full transition-[width]', bar)} style={{ width: `${loaded ? t.pct : 0}%` }} />
+      </div>
+      <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3 border-t border-slate-100 pt-4">
+        <MonthPicker value={month} onChange={setMonth} className="self-start" />
+        <div className="min-w-0 flex-1 sm:order-none">
+          <p className="text-sm text-slate-600">
+            Đã {word} trong {monthLabel(month).toLowerCase()}:{' '}
+            {pays === null ? <span className="text-slate-400">đang tải…</span> : <Money value={m.total} className={cx('font-bold', paidTone)} />}
+            {pays !== null && <span className="text-slate-500"> · {m.count} lần</span>}
+          </p>
+          {pays !== null && m.count > 0 && (
+            <p className="mt-0.5 text-xs text-slate-500">
+              Tiền mặt <Money value={m.byMethod.CASH} className="font-medium text-slate-700" /> · Chuyển khoản <Money value={m.byMethod.BANK} className="font-medium text-slate-700" />
+              {m.byMethod.OTHER > 0 && (
+                <>
+                  {' '}
+                  · Khác <Money value={m.byMethod.OTHER} className="font-medium text-slate-700" />
+                </>
+              )}
+            </p>
+          )}
+        </div>
+        {action && (
+          <Button size="sm" variant={ar ? 'jade' : 'vermilion'} icon={Plus} onClick={action.onClick} className="self-start sm:self-center">
+            {action.label}
+          </Button>
+        )}
+      </div>
+    </Card>
   );
 }
 

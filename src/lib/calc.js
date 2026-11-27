@@ -606,3 +606,35 @@ export function computeVariance(snapshot, payments = []) {
 
   return { inRows, outRows, unplannedIn, unplannedOut, untracked, totals };
 }
+
+/* ------------------------------------------------------------------ */
+/*  Tổng hợp đã thu / đã trả của công nợ                               */
+/* ------------------------------------------------------------------ */
+
+/** Tổng giá trị, đã thu (trả), còn lại của một danh sách công nợ */
+export function debtTotals(list = []) {
+  let total = 0;
+  let paid = 0;
+  let remain = 0;
+  let open = 0;
+  for (const r of list) {
+    total += num(r.total);
+    paid += num(r.paid);
+    const rem = remaining(r);
+    remain += rem;
+    if (rem > 0) open += 1;
+  }
+  return { count: list.length, open, done: list.length - open, total, paid, remain, pct: total > 0 ? Math.min(100, Math.round((paid / total) * 1000) / 10) : 0 };
+}
+
+/** Các lần thu / trả trong kỳ theo hình thức */
+export function paymentTotals(payments = [], kind) {
+  const list = payments.filter((p) => !kind || p.kind === kind);
+  const byMethod = { CASH: 0, BANK: 0, OTHER: 0 };
+  let total = 0;
+  for (const p of list) {
+    total += num(p.amount);
+    byMethod[p.method in byMethod ? p.method : 'OTHER'] += num(p.amount);
+  }
+  return { total, count: list.length, byMethod };
+}
