@@ -5,6 +5,7 @@ import { db } from '../lib/firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { AuditedBatch, C, COLLECTION_LABEL, friendlyError } from '../lib/db.js';
 import { ImportPanel } from '../components/ImportPanel.jsx';
+import { BackupPanel } from '../components/BackupPanel.jsx';
 import { fmtDate, fmtDateTime } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
 import { ROLE_LABEL } from '../lib/roles.js';
@@ -428,6 +429,7 @@ function AccessPanel() {
             </Badge>
           </div>
         </Card>
+        <BackupPanel />
         <ImportPanel />
       </div>
     </div>
