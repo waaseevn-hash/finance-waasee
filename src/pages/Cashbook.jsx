@@ -30,7 +30,7 @@ import { downloadXlsx } from '../lib/xlsx.js';
 import { resolveNames } from '../lib/runtime.js';
 import { can } from '../lib/roles.js';
 import { useCashHolders } from '../lib/holders.js';
-import { cashEffect } from '../lib/vouchers.js';
+import { bankFlow, flowEffect, isBank } from '../lib/vouchers.js';
 import { approveVouchers } from '../lib/voucherService.js';
 import { openPayOrders } from '../lib/approvals.js';
 import { Who } from '../components/Who.jsx';
@@ -194,7 +194,7 @@ export default function Cashbook() {
       </div>
 
       <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <ApprovalsCard total={total} className="xl:col-span-2" />
+        <ApprovalsCard cash={total} deposits={bankSummary(banks, loans).totals.deposit} className="xl:col-span-2" />
         <DepositsCard banks={banks} loans={loans} onEdit={() => quick.open('deposits')} />
       </div>
 
@@ -446,7 +446,8 @@ function DepositsCard({ banks, loans, onEdit }) {
 }
 
 /* ============================ Các khoản cần duyệt chi ============================ */
-function ApprovalsCard({ total, className = '' }) {
+function ApprovalsCard({ cash, deposits, className = '' }) {
+  const total = cash + deposits;
   const { role, actor } = useAuth();
   const data = useData();
   const toast = useToast();
@@ -462,17 +463,19 @@ function ApprovalsCard({ total, className = '' }) {
     const own = (data.vouchers || []).filter((x) => !x.auto);
     const pending = own.filter((x) => x.status === 'PENDING').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     const approved = own.filter((x) => x.status === 'APPROVED');
-    const approvedOut = approved.reduce((s, x) => s + cashEffect(x).out, 0);
-    const approvedIn = approved.reduce((s, x) => s + cashEffect(x).in, 0);
-    const pendingOut = pending.reduce((s, x) => s + cashEffect(x).out, 0);
+    // Dòng tiền = tiền mặt (111) + tiền gửi (112)
+    const approvedOut = approved.reduce((s, x) => s + flowEffect(x).out, 0);
+    const approvedIn = approved.reduce((s, x) => s + flowEffect(x).in, 0);
+    const pendingOut = pending.reduce((s, x) => s + flowEffect(x).out, 0);
+    const pendingBank = pending.reduce((s, x) => s + bankFlow(x).out, 0) + approved.reduce((s, x) => s + bankFlow(x).out, 0);
     // Tiền còn lại nếu duyệt lần lượt từng chứng từ (sau khi đã trừ phần đã duyệt chờ kết chuyển)
     let run = total - approvedOut + approvedIn;
     const rows = pending.map((x) => {
-      const e = cashEffect(x);
+      const e = flowEffect(x);
       run += e.in - e.out;
-      return { ...x, out: e.out, inn: e.in, after: run };
+      return { ...x, out: e.out, inn: e.in, bank: isBank(x), after: run };
     });
-    return { rows, approved, approvedOut, approvedIn, pendingOut, afterAll: run };
+    return { rows, approved, approvedOut, approvedIn, pendingOut, bankOut: pendingBank, afterAll: run };
   }, [data.vouchers, total]);
 
   const ap = useMemo(() => {
@@ -509,13 +512,22 @@ function ApprovalsCard({ total, className = '' }) {
     <Card className={cx('flex flex-col', className)}>
       <CardHeader
         title="Các khoản cần duyệt chi"
-        subtitle="Đối chiếu với tiền mặt đang có để biết duyệt được những khoản nào"
+        subtitle="Đối chiếu với tiền mặt và tiền gửi đang có để biết duyệt được những khoản nào"
         icon={Stamp}
         iconClass="bg-vermilion-50 text-vermilion-700"
       />
       <div className="grid grid-cols-3 gap-px border-y border-slate-100 bg-slate-100">
         <div className="bg-white px-3 py-3 sm:px-5">
-          <Figure label="Tiền mặt khả dụng" value={total} tone="text-jade-700" />
+          <Figure
+            label="Tiền khả dụng"
+            value={total}
+            tone="text-jade-700"
+            sub={
+              <span className="hidden sm:inline">
+                tiền mặt <Money value={cash} /> · tiền gửi <Money value={deposits} />
+              </span>
+            }
+          />
         </div>
         <div className="bg-white px-3 py-3 sm:px-5">
           <Figure
@@ -525,6 +537,12 @@ function ApprovalsCard({ total, className = '' }) {
             sub={
               <span className="hidden sm:inline">
                 chờ duyệt <Money value={v.pendingOut} /> · chờ kết chuyển <Money value={v.approvedOut} />
+                {v.bankOut > 0 && (
+                  <>
+                    {' '}
+                    (chuyển khoản <Money value={v.bankOut} />)
+                  </>
+                )}
               </span>
             }
           />
@@ -559,7 +577,10 @@ function ApprovalsCard({ total, className = '' }) {
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                       <VTypeChip type={r.type} className="shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-ink-900">{r.person || '—'}</p>
+                        <p className="flex items-center gap-1.5 text-sm font-medium text-ink-900">
+                          <span className="truncate">{r.person || '—'}</span>
+                          {r.bank && <span className="shrink-0 rounded bg-sapphire-50 px-1 text-[10px] font-semibold text-sapphire-700 ring-1 ring-inset ring-sapphire-200">CK</span>}
+                        </p>
                         <p className="truncate text-xs text-slate-500">
                           {fmtDate(r.date)}
                           {r.reason && ` · ${r.reason}`}

@@ -119,7 +119,8 @@ service cloud.firestore {
     function validBank(d) {
       return shortText(d.name, 200) && d.name.size() > 0
         && nonNeg(d.creditLimit)
-        && nonNeg(d.depositBalance);
+        && nonNeg(d.depositBalance)
+        && shortText(d.get('accountNo', ''), 40);
     }
     function validLoan(d) {
       return d.bankId is string
@@ -191,7 +192,11 @@ service cloud.firestore {
         && (d.type != 'TT' || (d.items is list && d.items.size() > 0 && d.items.size() <= 100 && nonNeg(d.advanceAmount)))
         && d.get('attachments', []) is list && d.get('attachments', []).size() <= 12
         && nonNeg(d.get('approvedAmount', 0))
-        && shortText(d.get('approvalNote', ''), 500);
+        && shortText(d.get('approvalNote', ''), 500)
+        && d.get('payMethod', 'CASH') in ['CASH', 'BANK']
+        && shortText(d.get('payeeAccount', ''), 40)
+        && shortText(d.get('payeeName', ''), 200)
+        && shortText(d.get('payeeBank', ''), 200);
     }
     function changed() {
       return request.resource.data.diff(resource.data).affectedKeys();

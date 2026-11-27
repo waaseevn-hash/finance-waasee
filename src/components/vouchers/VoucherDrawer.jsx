@@ -6,7 +6,7 @@ import { AuditedBatch, C, friendlyError } from '../../lib/db.js';
 import { can } from '../../lib/roles.js';
 import { fmtDate } from '../../lib/dates.js';
 import { fmtVND } from '../../lib/format.js';
-import { VTYPE, accountName, advanceRemaining, isPartial, itemAmount, requestedAmount, settlement, voucherAmount } from '../../lib/vouchers.js';
+import { VTYPE, accountName, advanceRemaining, isBank, isPartial, itemAmount, moneyAccount, requestedAmount, settlement, transferContent, voucherAmount } from '../../lib/vouchers.js';
 import { ApproveVoucherModal } from './ApproveVoucherModal.jsx';
 import { moneyToWords } from '../../lib/vnwords.js';
 import { deleteVoucher, loadAttachments, postVouchers, rejectVoucher, reverseVoucher } from '../../lib/voucherService.js';
@@ -74,7 +74,7 @@ export function ReasonModal({ open, title, label, confirmText, tone = 'danger', 
 /**
  * Chi tiết một chứng từ + thao tác theo vai trò & trạng thái.
  */
-export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }) {
+export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, onPostBank }) {
   const { actor, role } = useAuth();
   const data = useData();
   const toast = useToast();
@@ -158,6 +158,8 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
       }, 'Đã xóa chứng từ');
   };
   const postNow = async () => {
+    // Chứng từ chuyển khoản: chuyển sang màn kết chuyển để chọn tài khoản ngân hàng của công ty
+    if (isBank(v) && onPostBank) return onPostBank(v);
     const eff = v.type === 'PT' ? 'thu' : 'chi';
     const ok = await confirm({
       title: `Kết chuyển ngay ${v.no}?`,
@@ -301,10 +303,30 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
               Đã quyết toán <Money value={v.settledAmount || 0} className="font-semibold" /> · còn <Money value={advanceRemaining(v)} className="font-semibold text-amber-700" />
             </Row>
           )}
-          {v.type === 'PT' && <Row label="Định khoản">Nợ 1111 / Có {v.credit} — {accountName(v.credit)}</Row>}
-          {v.type === 'PC' && <Row label="Định khoản">Nợ {v.debit} — {accountName(v.debit)} / Có 1111</Row>}
+          {v.type === 'PT' && <Row label="Định khoản">Nợ {moneyAccount(v)} / Có {v.credit} — {accountName(v.credit)}</Row>}
+          {v.type === 'PC' && <Row label="Định khoản">Nợ {v.debit} — {accountName(v.debit)} / Có {moneyAccount(v)}</Row>}
           {(v.type === 'PT' || v.type === 'PC') && <Row label="Quyển số">{v.bookNo}</Row>}
           <Row label="Kèm theo">{v.attachedDocs ? `${v.attachedDocs} chứng từ gốc` : ''}</Row>
+          <Row label={v.type === 'PT' ? 'Hình thức nhận' : 'Hình thức chi'}>
+            {isBank(v) ? <span className="font-medium text-sapphire-700">Chuyển khoản (TK 112)</span> : 'Tiền mặt (TK 111)'}
+          </Row>
+          {isBank(v) && v.type !== 'PT' && (
+            <Row label="Người thụ hưởng">
+              <span className="block font-medium">{v.payeeName || v.person}</span>
+              <span className="block font-mono text-[13px]">{v.payeeAccount}</span>
+              <span className="block text-xs text-slate-500">
+                {[v.payeeBank, v.payeeBranch].filter(Boolean).join(' – ')}
+                {v.payeeTaxCode && ` · MST ${v.payeeTaxCode}`}
+              </span>
+              <span className="block text-xs text-slate-500">Nội dung CK: {v.transferNote || transferContent(v)}</span>
+            </Row>
+          )}
+          {isBank(v) && batch?.payBank?.name && (
+            <Row label={v.type === 'PT' ? 'Vào tài khoản' : 'Chi từ tài khoản'}>
+              {batch.payBank.name}
+              {batch.payBank.accountNo && <span className="font-mono"> · {batch.payBank.accountNo}</span>}
+            </Row>
+          )}
         </dl>
 
         {v.type === 'TT' && (

@@ -74,11 +74,19 @@ export async function exportPagesPdf(printDoc, baseName) {
   const prevZoom = body.style.zoom;
   body.style.zoom = '';
   try {
+    // Chờ phông chữ nhúng (Waasee Serif — đủ dấu tiếng Việt) tải xong rồi mới chụp, tránh lỗi phông / dấu lệch
+    if (printDoc.fonts) {
+      await Promise.all(
+        ['400 12pt "Waasee Serif"', '700 12pt "Waasee Serif"', 'italic 400 12pt "Waasee Serif"', 'italic 700 12pt "Waasee Serif"'].map((ff) => printDoc.fonts.load(ff, 'Tiếng Việt đầy đủ dấu').catch(() => null)),
+      );
+      await printDoc.fonts.ready;
+    }
     const pages = [...printDoc.querySelectorAll('.page')];
-    const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+    pdf.setProperties({ title: baseName, creator: 'Quản lý Dòng tiền' });
     let first = true;
     for (const el of pages) {
-      const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#ffffff', logging: false, windowWidth: el.scrollWidth });
+      const canvas = await window.html2canvas(el, { scale: 2.5, backgroundColor: '#ffffff', logging: false, useCORS: true, windowWidth: el.scrollWidth });
       const pxPerMm = canvas.width / 210;
       const pageHpx = Math.floor(297 * pxPerMm);
       for (let y = 0; y < canvas.height - 2; y += pageHpx) {
@@ -89,7 +97,7 @@ export async function exportPagesPdf(printDoc, baseName) {
         slice.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
         if (!first) pdf.addPage();
         first = false;
-        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, h / pxPerMm);
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, 210, h / pxPerMm, undefined, 'FAST');
       }
     }
     await saveFile(`${baseName}.pdf`, pdf.output('arraybuffer'));

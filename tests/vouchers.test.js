@@ -124,7 +124,7 @@ test('bảng kê đợt: mỗi bút toán tiền mặt chỉ một dòng; mẫu 
   assert.equal(cashOut, p.batch.paymentsTotal);
   const company = { companyName: 'Cty A', address: 'HN', regulation: 'TT200', bookNo: '01', addressee: 'Giám đốc' };
   const html = buildPrintHtml({ batch: p.batch, docs: p.docs, company, paper: 'A5' });
-  assert.match(html, /BẢNG KÊ CHỨNG TỪ KẾT XUẤT/);
+  assert.match(html, /BẢNG KÊ CHỨNG TỪ KẾT CHUYỂN/);
   assert.match(html, /GIẤY ĐỀ NGHỊ TẠM ỨNG/);
   assert.match(html, /Năm trăm nghìn đồng/);
   assert.match(html, /Sáu trăm nghìn đồng/);
@@ -194,4 +194,52 @@ test('duyệt một phần: số được duyệt dùng khi kết chuyển', asy
   assert.equal(p.batch.paymentsTotal, 5_500_000);
   // Tạm ứng còn phải quyết toán theo số được duyệt
   assert.equal(advanceRemaining({ ...tu, status: 'POSTED', settledAmount: 1e6 }), 2e6);
+});
+
+test('chuyển khoản (TK 112): kết chuyển không qua sổ quỹ tiền mặt', async () => {
+  const { bankFlow, bankPayments, flowEffect, plainText } = await import('../src/lib/vouchers.js');
+  const pay = { payMethod: 'BANK', payeeName: 'CÔNG TY TNHH ÁNH DƯƠNG', payeeAccount: '0071001234567', payeeBank: 'Vietcombank', payeeBranch: 'CN Bình Dương' };
+  const pc = { ...base, id: 'pcb', type: 'PC', no: 'PC-202611-010', amount: 3e6, debit: '331', ...pay };
+  const pt = { ...base, id: 'ptb', type: 'PT', no: 'PT-202611-005', amount: 2e6, credit: '131', payMethod: 'BANK' };
+  const ttb = tt('ttb', [{ name: 'Vé', qty: 1, price: 800000 }], 1_000_000, { no: 'TT-202611-009', ...pay });
+  const tuc = { ...base, id: 'tuc', type: 'TU', no: 'TU-202611-011', amount: 1e6 };
+  assert.deepEqual(cashEffect(pc), { in: 0, out: 0 });
+  assert.deepEqual(bankFlow(pc), { in: 0, out: 3e6 });
+  assert.deepEqual(bankFlow(ttb), { in: 200000, out: 0 });
+  assert.deepEqual(flowEffect(tuc), cashEffect(tuc));
+  const p = buildPostingPlan({ vouchers: [pc, pt, ttb, tuc], advances: {}, counters: {}, postDate: '2026-11-27', newId, batchId: 'BB', actorEmail: 'o@x' });
+  // Chỉ giấy tạm ứng tiền mặt sinh phiếu chi + bút toán sổ quỹ
+  assert.equal(p.cashEntries.length, 1);
+  assert.deepEqual(p.generated.map((g) => g.data.type), ['PC']);
+  assert.deepEqual(p.voucherUpdates.find((u) => u.id === 'pcb').patch.entries, [{ debit: '331', credit: '1121', amount: 3e6 }]);
+  assert.deepEqual(p.voucherUpdates.find((u) => u.id === 'ptb').patch.entries, [{ debit: '1121', credit: '131', amount: 2e6 }]);
+  assert.deepEqual(p.voucherUpdates.find((u) => u.id === 'ttb').patch.entries, [
+    { debit: '642', credit: '141', amount: 800000 },
+    { debit: '1121', credit: '141', amount: 200000 },
+  ]);
+  assert.equal(p.batch.bankTotal, 3e6);
+  assert.equal(p.batch.bankInTotal, 2.2e6);
+  assert.equal(p.batch.paymentsTotal, 1e6);
+  assert.equal(p.batch.receiptsTotal, 0);
+  const list = bankPayments(p.docs);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].account, '0071001234567');
+  assert.equal(list[0].content, 'PC-202611-010 Mua van phong pham');
+  assert.equal(plainText('Đà Nẵng – tháng 11'), 'Da Nang thang 11');
+});
+
+test('bản in: bảng kê lệnh chuyển khoản và cột tiền gửi 112', async () => {
+  const { buildPrintHtml } = await import('../src/lib/voucherPrint.js');
+  const pay = { payMethod: 'BANK', payeeName: 'CONG TY ANH DUONG', payeeAccount: '0071001234567', payeeBank: 'Vietcombank' };
+  const pc = { ...base, id: 'pz', type: 'PC', amount: 4e6, debit: '331', ...pay };
+  const p = buildPostingPlan({ vouchers: [pc], postDate: '2026-11-27', newId, batchId: 'BZ' });
+  const company = { companyName: 'Công ty Waasee', address: 'Hà Nội', regulation: 'Thông tư số 200/2014/TT-BTC ngày 22/12/2014 của Bộ Tài chính' };
+  const html = buildPrintHtml({ batch: { ...p.batch, payBank: { name: 'BIDV', accountNo: '123' } }, docs: p.docs, company, fontBase: 'fonts/' });
+  assert.match(html, /BẢNG KÊ LỆNH CHUYỂN KHOẢN/);
+  assert.match(html, /0071001234567/);
+  assert.match(html, /Ngân hàng \(112\)/);
+  assert.match(html, /LỆNH CHI/);
+  assert.match(html, /WaaseeSerif-Regular\.woff/);
+  const only = buildPrintHtml({ batch: p.batch, docs: p.docs, company, only: 'bank', fontBase: 'fonts/' });
+  assert.equal((only.match(/class="page/g) || []).length, 1);
 });

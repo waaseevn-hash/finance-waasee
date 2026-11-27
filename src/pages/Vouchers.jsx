@@ -26,7 +26,7 @@ import { fmtVND, matchSearch } from '../lib/format.js';
 import { cashBalance, holderBalances } from '../lib/calc.js';
 import { useCashHolders } from '../lib/holders.js';
 import { useCompany } from '../lib/brand.js';
-import { VSTATUS, VTYPE, advanceRemaining, cashEffect, isPartial, ledgerLines, openAdvances, requestedAmount, voucherAmount, voucherStats } from '../lib/vouchers.js';
+import { VSTATUS, VTYPE, advanceRemaining, bankFlow, cashEffect, isBank, isPartial, ledgerLines, openAdvances, requestedAmount, voucherAmount, voucherStats } from '../lib/vouchers.js';
 import { approveVouchers, postVouchers } from '../lib/voucherService.js';
 import { downloadBatchXlsx } from '../lib/voucherExcel.js';
 import { useToast } from '../components/feedback.jsx';
@@ -52,8 +52,13 @@ function previewTotals(list) {
   let rt = 0;
   let pc = 0;
   let pt = 0;
+  let bic = 0;
+  let bit = 0;
+  let boc = 0;
+  let bot = 0;
   for (const v of list) {
     const e = cashEffect(v);
+    const b = bankFlow(v);
     if (e.in > 0) {
       rc += 1;
       rt += e.in;
@@ -62,9 +67,20 @@ function previewTotals(list) {
       pc += 1;
       pt += e.out;
     }
+    if (b.in > 0) {
+      bic += 1;
+      bit += b.in;
+    }
+    if (b.out > 0) {
+      boc += 1;
+      bot += b.out;
+    }
   }
-  return { receiptsCount: rc, receiptsTotal: rt, paymentsCount: pc, paymentsTotal: pt, net: rt - pt };
+  return { receiptsCount: rc, receiptsTotal: rt, paymentsCount: pc, paymentsTotal: pt, net: rt - pt, bankInCount: bic, bankInTotal: bit, bankCount: boc, bankTotal: bot, bankNet: bit - bot };
 }
+
+/** Tài khoản ngân hàng mặc định để chi / nhận chuyển khoản: ưu tiên tài khoản đã khai số tài khoản */
+const defaultPayBank = (banks = []) => banks.find((b) => b.accountNo) || banks[0] || null;
 
 /** Tổng hợp lại từ chứng từ hiện còn hiệu lực của một đợt (dùng khi in lại) */
 function batchFromDocs(batch, docs) {
@@ -73,7 +89,19 @@ function batchFromDocs(batch, docs) {
   const payments = docs.filter((d) => d.type === 'PC');
   const rt = lines.filter((l) => l.debit === '1111').reduce((s, l) => s + l.amount, 0);
   const pt = lines.filter((l) => l.credit === '1111').reduce((s, l) => s + l.amount, 0);
-  return { ...batch, receiptsCount: receipts.length, receiptsTotal: rt, paymentsCount: payments.length, paymentsTotal: pt, net: rt - pt };
+  const bi = lines.filter((l) => l.debit === '1121').reduce((s, l) => s + l.amount, 0);
+  const bo = lines.filter((l) => l.credit === '1121').reduce((s, l) => s + l.amount, 0);
+  return {
+    ...batch,
+    receiptsCount: receipts.length,
+    receiptsTotal: rt,
+    paymentsCount: payments.length,
+    paymentsTotal: pt,
+    net: rt - pt,
+    bankInTotal: bi,
+    bankTotal: bo,
+    bankNet: bi - bo,
+  };
 }
 
 function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
@@ -97,6 +125,7 @@ function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
             <span className="font-semibold text-ink-900 truncate">{v.person}</span>
             <VTypeChip type={v.type} auto={v.auto} />
             {v.no && <span className="font-mono text-[11px] text-slate-500">{v.no}</span>}
+            {isBank(v) && <span className="rounded bg-sapphire-50 px-1.5 py-px text-[10px] font-semibold text-sapphire-700 ring-1 ring-inset ring-sapphire-200">CK</span>}
           </span>
           <span className="mt-0.5 block text-xs text-slate-500 truncate">
             {fmtDate(v.date)} · {v.reason}
@@ -142,12 +171,16 @@ function CoverBars({ cash, approvedOut, pendingOut }) {
   );
 }
 
-function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLine }) {
+function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo, holdersLine }) {
   const s = stats;
-  const need = s.pendingOut + s.approvedOut;
-  // Ưu tiên: kết chuyển các khoản đã duyệt trước, sau đó mới tới các khoản đang chờ duyệt
-  const afterApproved = cash - s.approvedOut + s.approvedIn;
-  const afterAll = afterApproved - s.pendingOut + s.pendingIn;
+  const avail = cash + deposits;
+  const needCash = s.pendingOut + s.approvedOut;
+  const needBank = s.pendingBank + s.approvedBank;
+  const need = needCash + needBank;
+  // Ưu tiên: kết chuyển các khoản đã duyệt trước, sau đó mới tới các khoản đang chờ duyệt (tính cả tiền mặt và tiền gửi)
+  const afterApproved = avail - s.approvedOut - s.approvedBank + s.approvedIn + s.approvedBankIn;
+  const afterAll = afterApproved - s.pendingOut - s.pendingBank + s.pendingIn + s.pendingBankIn;
+  const cashAfterAll = cash - needCash + s.approvedIn + s.pendingIn;
   const Left = ({ v }) => (
     <b className={v < 0 ? 'text-rose-600' : 'text-ink-900'}>
       {v < 0 ? 'thiếu ' : 'còn '}
@@ -157,13 +190,24 @@ function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLi
   return (
     <Card className="mb-5">
       <div className="px-4 sm:px-5 pt-4">
-        <p className="font-display text-base font-bold text-ink-900">{treasury ? 'Tiền mặt và các khoản cần chi' : 'Các khoản tôi đề nghị chi'}</p>
+        <p className="font-display text-base font-bold text-ink-900">{treasury ? 'Dòng tiền và các khoản cần chi' : 'Các khoản tôi đề nghị chi'}</p>
         <p className="text-xs text-slate-500">
-          {treasury ? 'Đối chiếu tiền mặt đang có với chứng từ chờ duyệt và chờ kết chuyển để biết duyệt, kết chuyển được những khoản nào' : 'Chứng từ của tôi đang chờ duyệt hoặc chờ kết chuyển'}
+          {treasury ? 'Tiền mặt (111) + tiền gửi ngân hàng (112) đối chiếu với chứng từ chờ duyệt và chờ kết chuyển' : 'Chứng từ của tôi đang chờ duyệt hoặc chờ kết chuyển'}
         </p>
       </div>
       <div className={cx('grid gap-3 sm:gap-6 px-4 sm:px-5 pt-4 pb-3', treasury ? 'grid-cols-2' : 'grid-cols-1')}>
-        {treasury && <Figure label="Số tiền mặt khả dụng" value={cash} tone="text-jade-700" sub={holdersLine || 'tồn quỹ tiền mặt hiện tại'} />}
+        {treasury && (
+          <Figure
+            label="Số tiền khả dụng"
+            value={avail}
+            tone="text-jade-700"
+            sub={
+              <>
+                tiền mặt <Money value={cash} /> · tiền gửi <Money value={deposits} />
+              </>
+            }
+          />
+        )}
         <Figure
           label="Số tiền cần phải chi"
           value={ready ? need : 0}
@@ -172,7 +216,7 @@ function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLi
           sub={
             need > 0 ? (
               <>
-                chờ duyệt <Money value={s.pendingOut} /> · chờ kết chuyển <Money value={s.approvedOut} />
+                tiền mặt <Money value={needCash} /> · chuyển khoản <Money value={needBank} />
               </>
             ) : (
               'không có khoản nào'
@@ -182,7 +226,7 @@ function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLi
       </div>
       {treasury && ready && need > 0 && (
         <div className="px-4 sm:px-5 pb-4">
-          <CoverBars cash={cash} approvedOut={s.approvedOut} pendingOut={s.pendingOut} />
+          <CoverBars cash={avail} approvedOut={s.approvedOut + s.approvedBank} pendingOut={s.pendingOut + s.pendingBank} />
           <div className="mt-2.5 grid gap-1 text-xs text-slate-600 sm:grid-cols-2 sm:gap-4">
             {s.approvedCount > 0 && (
               <p className="flex items-center gap-1.5">
@@ -201,8 +245,14 @@ function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLi
               </p>
             )}
           </div>
+          {cashAfterAll < 0 && afterAll >= 0 && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+              Riêng tiền mặt thiếu <Money value={-cashAfterAll} className="font-semibold" /> — rút thêm tiền gửi về két hoặc chuyển một số khoản sang chuyển khoản.
+            </p>
+          )}
         </div>
       )}
+      {holdersLine && treasury && <p className="-mt-2 px-4 pb-3 text-[11px] text-slate-500 sm:px-5">Tiền mặt theo người giữ: {holdersLine}</p>}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-slate-100 border-t border-slate-100">
         <MiniStat
           label="Chờ duyệt"
@@ -217,15 +267,11 @@ function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLi
           sub={
             s.approvedCount ? (
               <>
-                {s.approvedOut > 0 && (
+                chi <Money value={s.approvedOut + s.approvedBank} />
+                {s.approvedIn + s.approvedBankIn > 0 && (
                   <>
-                    chi <Money value={s.approvedOut} />
-                  </>
-                )}
-                {s.approvedOut > 0 && s.approvedIn > 0 && ' · '}
-                {s.approvedIn > 0 && (
-                  <>
-                    thu <Money value={s.approvedIn} />
+                    {' '}
+                    · thu <Money value={s.approvedIn + s.approvedBankIn} />
                   </>
                 )}
               </>
@@ -275,6 +321,8 @@ export default function Vouchers({ params }) {
   const [paper, setPaper] = useState('A4');
   const [confirmPost, setConfirmPost] = useState(false);
   const [busy, setBusy] = useState('');
+  const [payBankId, setPayBankId] = useState('');
+  const payBank = (data.banks || []).find((b) => b.id === payBankId) || defaultPayBank(data.banks || []);
 
   // Mở chứng từ từ màn hình khác (vd Sổ quỹ bấm vào số phiếu)
   useEffect(() => {
@@ -300,6 +348,7 @@ export default function Vouchers({ params }) {
   const treasury = can(role, 'viewTreasury');
   const holders = useCashHolders(treasury);
   const cashNow = useMemo(() => (treasury ? cashBalance(data.cash) : 0), [treasury, data.cash]);
+  const depositsNow = useMemo(() => (treasury ? (data.banks || []).reduce((t, b) => t + (Number(b.depositBalance) || 0), 0) : 0), [treasury, data.banks]);
   const holdersLine = useMemo(() => {
     if (!treasury) return '';
     const bal = holderBalances(data.cash);
@@ -361,7 +410,7 @@ export default function Vouchers({ params }) {
     setBusy('post');
     const before = cashBalance(data.cash);
     try {
-      const res = await postVouchers({ actor, ids: selectedForPost.map((v) => v.id), postDate });
+      const res = await postVouchers({ actor, ids: selectedForPost.map((v) => v.id), postDate, payBank: totals.bankTotal || totals.bankInTotal ? payBank : null });
       toast.success(`Đã kết chuyển đợt ${res.batch.code}: ${res.batch.voucherIds.length} chứng từ gốc${res.batch.generatedIds.length ? ` + ${res.batch.generatedIds.length} phiếu tự động` : ''} đã ghi sổ quỹ và khóa`);
       setConfirmPost(false);
       setPostSel(new Set());
@@ -445,7 +494,7 @@ export default function Vouchers({ params }) {
         </div>
       )}
 
-      <VoucherSummary stats={stats} cash={cashNow} treasury={treasury} holdersLine={holdersLine} manager={manager} ready={!!data.vouchersReady} onGo={goTab} />
+      <VoucherSummary stats={stats} cash={cashNow} deposits={depositsNow} treasury={treasury} holdersLine={holdersLine} manager={manager} ready={!!data.vouchersReady} onGo={goTab} />
 
       {/* Bốn cuốn chứng từ để lập nhanh */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -588,7 +637,7 @@ export default function Vouchers({ params }) {
                 </div>
                 <div className="flex justify-between px-3 py-2">
                   <dt className="text-slate-600 flex items-center gap-1.5">
-                    <ArrowDownLeft className="h-4 w-4 text-jade-600" /> Thu ({totals.receiptsCount} phiếu)
+                    <ArrowDownLeft className="h-4 w-4 text-jade-600" /> Thu tiền mặt ({totals.receiptsCount})
                   </dt>
                   <dd>
                     <Money value={totals.receiptsTotal} className="font-semibold text-jade-700" />
@@ -596,23 +645,63 @@ export default function Vouchers({ params }) {
                 </div>
                 <div className="flex justify-between px-3 py-2">
                   <dt className="text-slate-600 flex items-center gap-1.5">
-                    <ArrowUpRight className="h-4 w-4 text-vermilion-600" /> Chi ({totals.paymentsCount} phiếu)
+                    <ArrowUpRight className="h-4 w-4 text-vermilion-600" /> Chi tiền mặt ({totals.paymentsCount})
                   </dt>
                   <dd>
                     <Money value={totals.paymentsTotal} className="font-semibold text-vermilion-700" />
                   </dd>
                 </div>
+                {(totals.bankInTotal > 0 || totals.bankTotal > 0) && (
+                  <>
+                    <div className="flex justify-between px-3 py-2">
+                      <dt className="text-slate-600 flex items-center gap-1.5">
+                        <ArrowDownLeft className="h-4 w-4 text-sapphire-600" /> Nhận chuyển khoản ({totals.bankInCount})
+                      </dt>
+                      <dd>
+                        <Money value={totals.bankInTotal} className="font-semibold text-sapphire-700" />
+                      </dd>
+                    </div>
+                    <div className="flex justify-between px-3 py-2">
+                      <dt className="text-slate-600 flex items-center gap-1.5">
+                        <ArrowUpRight className="h-4 w-4 text-sapphire-600" /> Chi chuyển khoản ({totals.bankCount})
+                      </dt>
+                      <dd>
+                        <Money value={totals.bankTotal} className="font-semibold text-sapphire-700" />
+                      </dd>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between px-3 py-2 bg-slate-50">
-                  <dt className="font-semibold text-ink-900">Chênh lệch thu − chi</dt>
+                  <dt className="font-semibold text-ink-900">Dòng tiền thuần (thu − chi)</dt>
                   <dd>
-                    <Money value={totals.net} sign className={cx('font-bold', totals.net < 0 ? 'text-rose-700' : 'text-jade-700')} />
+                    <Money value={totals.net + totals.bankNet} sign className={cx('font-bold', totals.net + totals.bankNet < 0 ? 'text-rose-700' : 'text-jade-700')} />
                   </dd>
                 </div>
               </dl>
+              {(totals.bankInTotal > 0 || totals.bankTotal > 0) && (
+                <Field label="Tài khoản ngân hàng của công ty (chi / nhận chuyển khoản)">
+                  <Select value={payBank?.id || ''} onChange={(e) => setPayBankId(e.target.value)}>
+                    {(data.banks || []).length === 0 && <option value="">Chưa có tài khoản — thêm ở Vay & Hạn mức NH</option>}
+                    {(data.banks || []).map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                        {b.accountNo ? ` · ${b.accountNo}` : ' · chưa có số TK'} · dư {fmtVND(b.depositBalance || 0)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
               {manager && can(role, 'viewTreasury') && (
                 <p className="text-xs text-slate-500">
-                  Tồn quỹ két hiện tại <Money value={cashBalance(data.cash)} className="font-semibold text-slate-700" /> → sau kết chuyển{' '}
+                  Tồn quỹ tiền mặt <Money value={cashBalance(data.cash)} className="font-semibold text-slate-700" /> → sau kết chuyển{' '}
                   <Money value={cashBalance(data.cash) + totals.net} className={cx('font-semibold', cashBalance(data.cash) + totals.net < 0 ? 'text-rose-700' : 'text-slate-700')} />
+                  {payBank && (totals.bankInTotal > 0 || totals.bankTotal > 0) && (
+                    <>
+                      <br />
+                      Tiền gửi {payBank.name} <Money value={payBank.depositBalance || 0} className="font-semibold text-slate-700" /> → sau kết chuyển{' '}
+                      <Money value={(Number(payBank.depositBalance) || 0) + totals.bankNet} className={cx('font-semibold', (Number(payBank.depositBalance) || 0) + totals.bankNet < 0 ? 'text-rose-700' : 'text-slate-700')} />
+                    </>
+                  )}
                 </p>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -761,8 +850,14 @@ export default function Vouchers({ params }) {
         <ol className="space-y-2 text-sm text-slate-700 list-decimal pl-5">
           <li>Tạo đợt kết chuyển mới, cấp số phiếu thu / phiếu chi cho phần hoàn ứng, chi bổ sung, chi tạm ứng.</li>
           <li>
-            Ghi Sổ quỹ tiền mặt: thu <b className="text-jade-700">{fmtVND(totals.receiptsTotal)}</b>, chi <b className="text-vermilion-700">{fmtVND(totals.paymentsTotal)}</b>.
+            Ghi Sổ quỹ tiền mặt (TK 111): thu <b className="text-jade-700">{fmtVND(totals.receiptsTotal)}</b>, chi <b className="text-vermilion-700">{fmtVND(totals.paymentsTotal)}</b>.
           </li>
+          {(totals.bankInTotal > 0 || totals.bankTotal > 0) && (
+            <li>
+              Tiền gửi ngân hàng (TK 112) — <b>{payBank ? `${payBank.name}${payBank.accountNo ? ` · ${payBank.accountNo}` : ''}` : 'chưa chọn tài khoản'}</b>: nhận{' '}
+              <b className="text-sapphire-700">{fmtVND(totals.bankInTotal)}</b>, chi <b className="text-sapphire-700">{fmtVND(totals.bankTotal)}</b>; số dư tiền gửi trên app được cập nhật theo. Bản in có <b>bảng kê lệnh chuyển khoản</b> (đủ số tài khoản người nhận) để kế toán đi lệnh.
+            </li>
+          )}
           <li>Khóa các chứng từ (trạng thái “Đã kết chuyển”), cập nhật “Chi nội bộ” trong Điều phối tháng.</li>
           <li>Mở bản in ({paper === 'A4' ? 'A4' : '2 liên A5'}) kèm bảng kê đợt; tải được PDF và Excel.</li>
         </ol>
@@ -788,6 +883,12 @@ export default function Vouchers({ params }) {
           onOpen={setOpenId}
           onEdit={(v) => setEditor({ existing: v })}
           onPrint={(docs, name) => setPrint({ docs, batch: null, title: `Bản in ${name}`, fileBase: `Chung-tu_${name}`, poster: actor.name, cash: null, paper: 'A4' })}
+          onPostBank={(v) => {
+            setOpenId(null);
+            setPostSel(new Set([v.id]));
+            setTab('post');
+            setConfirmPost(true);
+          }}
           onPosted={(res) =>
             setPrint({ docs: res.docs, batch: res.batch, title: `Kết xuất in phiếu — đợt ${res.batch.code}`, fileBase: `Ket-chuyen_${res.batch.code}`, poster: actor.name, cash: res.cash, paper: 'A4' })
           }

@@ -1,23 +1,39 @@
 /**
  * MẪU IN CHỨNG TỪ — Thông tư 200/2014/TT-BTC
  *   01-TT Phiếu thu · 02-TT Phiếu chi · 03-TT Giấy đề nghị tạm ứng · 05-TT Giấy đề nghị thanh toán (kèm bảng kê & quyết toán tạm ứng)
- *   + Trang 1: Bảng kê đợt kết xuất & kết chuyển
+ *   + Bảng kê đợt kết chuyển (tiền mặt 111 và tiền gửi 112)
+ *   + Bảng kê lệnh chuyển khoản (đủ thông tin tài khoản người thụ hưởng) để kế toán đi lệnh ngân hàng
  * Khổ giấy: A4 (mỗi chứng từ một trang) hoặc 2 liên A5 trên một tờ A4 (cắt đôi theo đường kẻ).
- * Kết quả là một tài liệu HTML hoàn chỉnh (in bằng hộp thoại In của trình duyệt -> "Lưu thành PDF").
+ * Phông chữ nhúng sẵn (Waasee Serif — có đủ dấu tiếng Việt, cùng khổ chữ với Times New Roman) để bản in
+ * và file PDF giống nhau trên mọi máy, kể cả điện thoại không có Times New Roman.
  */
 import { moneyToWords } from './vnwords.js';
-import { VTYPE, accountName, isPartial, itemAmount, ledgerLines, requestedAmount, settlement, voucherAmount } from './vouchers.js';
+import {
+  VTYPE,
+  accountName,
+  bankPayments,
+  isBank,
+  isPartial,
+  itemAmount,
+  ledgerLines,
+  moneyAccount,
+  requestedAmount,
+  settlement,
+  transferContent,
+  voucherAmount,
+} from './vouchers.js';
 
 const esc = (s) =>
   String(s ?? '')
+    .normalize('NFC')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-const money = (n) => (Math.round(Number(n) || 0)).toLocaleString('vi-VN');
+const money = (n) => Math.round(Number(n) || 0).toLocaleString('vi-VN');
 const dateParts = (iso) => {
   const [y, m, d] = String(iso || '').split('-');
-  return { d: d || '....', m: m || '....', y: y || '........' };
+  return { d: d || '.....', m: m || '.....', y: y || '.........' };
 };
 const longDate = (iso) => {
   const p = dateParts(iso);
@@ -27,152 +43,203 @@ const shortDate = (iso) => {
   const p = dateParts(iso);
   return iso ? `${p.d}/${p.m}/${p.y}` : '';
 };
-const dots = (v, min = 0) => (v ? esc(v) : '<span class="dots">' + '.'.repeat(Math.max(min, 20)) + '</span>');
+const words = (n) => {
+  const w = moneyToWords(n);
+  return w ? w.charAt(0).toUpperCase() + w.slice(1) : '';
+};
+
+/** Thư mục phông chữ (tuyệt đối, để khung in srcdoc và trình tạo PDF đều tải được) */
+function defaultFontBase() {
+  try {
+    if (typeof document !== 'undefined' && document.baseURI) return new URL('fonts/', document.baseURI).href;
+  } catch {
+    /* bỏ qua */
+  }
+  return 'fonts/';
+}
 
 /** Chứng từ có in vừa nửa trang A5 không */
 export function fitsHalf(v) {
   // GĐNTT có bảng quyết toán tạm ứng hoặc nhiều dòng chi phí: in trọn một trang A4
-  if (v.type === 'TT') return (v.items || []).length <= 3 && !(Number(v.advanceAmount) > 0) && String(v.reason || '').length <= 140;
-  return String(v.reason || '').length <= 260;
+  if (v.type === 'TT') return (v.items || []).length <= 3 && !(Number(v.advanceAmount) > 0) && !isBank(v) && String(v.reason || '').length <= 140;
+  if (v.type === 'TU' && (isBank(v) || isPartial(v))) return false;
+  if (v.type === 'PC' && isBank(v)) return String(v.reason || '').length <= 120;
+  return String(v.reason || '').length <= 220;
 }
 
-function header(company, v, title) {
-  const t = VTYPE[v.type];
-  const head = `
-  <div class="hd">
+/* ============================ khối dùng chung ============================ */
+
+/** Một dòng biểu mẫu: nhãn + giá trị trên dòng chấm (dòng trống vẫn có chấm để viết tay) */
+function f(label, value, { cls = '', raw = false } = {}) {
+  const v = raw ? value : esc(value);
+  return `<div class="f ${cls}"><span class="k">${label}</span><span class="v">${v || '&nbsp;'}</span></div>`;
+}
+
+function header(company, { formNo, internal = false }) {
+  const reg = esc(company.regulation || '')
+    .replace(/(\d+\/\d{4}\/[A-ZĐ-]+)/, '<span class="nw">$1</span>')
+    .replace(/\s+ngày\s+/, '<br/>ngày ');
+  return `
+  <header class="hd">
     <div class="org">
-      <div><b>Đơn vị:</b> ${esc(company.companyName)}</div>
-      <div><b>Địa chỉ:</b> ${esc(company.address)}</div>
-      ${company.taxCode ? `<div><b>MST:</b> ${esc(company.taxCode)}</div>` : ''}
+      <div>Đơn vị: <b>${esc(company.companyName)}</b></div>
+      <div>Địa chỉ: ${esc(company.address)}</div>
+      ${company.taxCode ? `<div>Mã số thuế: ${esc(company.taxCode)}</div>` : ''}
     </div>
     <div class="form">
-      <div class="form-no">${esc(t.form)}</div>
-      <div class="form-reg">(Ban hành theo ${esc(company.regulation)})</div>
+      ${internal ? `<div class="form-no">Chứng từ nội bộ</div><div class="form-reg">(Thanh toán qua ngân hàng)</div>` : `<div class="form-no">${esc(formNo)}</div><div class="form-reg">(Ban hành theo ${reg})</div>`}
     </div>
-  </div>`;
-  const cashForm = v.type === 'PT' || v.type === 'PC';
-  return `${head}
-  <div class="title-row${cashForm ? '' : ' plain'}">
-    <div class="title-mid">
+  </header>`;
+}
+
+/** Tiêu đề giữa trang + ô Quyển số / Số / Nợ / Có bên phải (phiếu thu, phiếu chi) */
+function titleBlock(title, v, { meta = null, sub = '' } = {}) {
+  const right = meta
+    ? `<table class="meta">${meta.map(([k, val]) => `<tr><td>${k}:</td><td><b>${esc(val)}</b></td></tr>`).join('')}</table>`
+    : '';
+  return `
+  <div class="tt">
+    <div></div>
+    <div class="mid">
       <h1>${esc(title)}</h1>
+      ${sub ? `<div class="h1-sub">${esc(sub)}</div>` : ''}
       <div class="date">${longDate(v.date)}</div>
-      ${cashForm ? '' : `<div class="no-line">Số: <b>${esc(v.no || '(chưa cấp số)')}</b></div>`}
+      ${meta ? '' : `<div class="no">Số: <b>${esc(v.no || '(chưa cấp số)')}</b></div>`}
     </div>
-    ${cashForm ? `<div class="meta">${metaBox(v, company)}</div>` : ''}
+    <div>${right}</div>
   </div>`;
 }
 
-function metaBox(v, company) {
-  const rows = [];
-  if (v.type === 'PT' || v.type === 'PC') rows.push(['Quyển số', v.bookNo || company.bookNo || '']);
-  rows.push(['Số', v.no || '(chưa cấp số)']);
-  if (v.type === 'PT') {
-    rows.push(['Nợ', '1111']);
-    rows.push(['Có', v.credit || '141']);
-  }
-  if (v.type === 'PC') {
-    rows.push(['Nợ', v.debit || '642']);
-    rows.push(['Có', '1111']);
-  }
-  return rows.map(([k, val]) => `<div><span>${k}:</span> <b>${esc(val)}</b></div>`).join('');
+/** Khối chữ ký: các hàng chức danh / hướng dẫn / chỗ ký / họ tên thẳng hàng nhau */
+function signatures(cols, date, { dateText = '' } = {}) {
+  const row = (cls, fn) => `<tr class="${cls}">${cols.map((c) => `<td>${fn(c)}</td>`).join('')}</tr>`;
+  return `<div class="signs${cols.length >= 5 ? ' five' : ''}">
+  <div class="sign-date">${dateText || (date ? longDate(date) : 'Ngày ..... tháng ..... năm .........')}</div>
+  <table class="sign">
+    ${row('role', (c) => esc(c.role))}
+    ${row('hint', (c) => `(${esc(c.hint || 'Ký, họ tên')})`)}
+    ${row('space', () => '')}
+    ${row('name', (c) => esc(c.name || ''))}
+  </table></div>`;
 }
 
-function signatures(cols, date) {
-  return `<div class="signs">
-  <div class="sign-date">${date ? longDate(date) : 'Ngày ..... tháng ..... năm .........'}</div>
-  <table class="sign"><tr>${cols
-    .map(
-      (c) => `<td>
-        <div class="role">${esc(c.role)}</div>
-        <div class="hint">(${esc(c.hint || 'Ký, họ tên')})</div>
-        <div class="space"></div>
-        <div class="name">${esc(c.name || '')}</div>
-      </td>`,
-    )
-    .join('')}</tr></table></div>`;
+function cashFoot() {
+  return `<div class="foot">
+    ${f('Đã nhận đủ số tiền (viết bằng chữ):', '')}
+    ${f('+ Tỷ giá ngoại tệ (vàng bạc, đá quý):', '')}
+    ${f('+ Số tiền quy đổi:', '')}
+    <div class="copy-note">(Liên gửi ra ngoài phải đóng dấu)</div>
+  </div>`;
 }
 
-function line(label, value, cls = '') {
-  return `<div class="ln ${cls}"><span class="lb">${label}</span> <span class="val">${value}</span></div>`;
+/** Khối thông tin chuyển khoản của người thụ hưởng */
+function payeeBlock(v, amount) {
+  return `<div class="box">
+    <div class="box-t">Thông tin chuyển khoản</div>
+    ${f('Đơn vị / người thụ hưởng:', `<b>${esc(v.payeeName || v.person)}</b>${v.payeeTaxCode ? ` — MST: ${esc(v.payeeTaxCode)}` : ''}`, { raw: true })}
+    ${f('Số tài khoản:', `<b class="acct">${esc(v.payeeAccount)}</b>`, { raw: true })}
+    ${f('Tại ngân hàng:', [v.payeeBank, v.payeeBranch].filter(Boolean).join(' – '))}
+    ${amount ? f('Số tiền chuyển:', `<b>${money(amount)} đồng</b>`, { raw: true }) : ''}
+    ${f('Nội dung chuyển khoản:', v.transferNote || transferContent(v))}
+  </div>`;
 }
 
-/* ---------------- 01-TT PHIẾU THU ---------------- */
+/* ============================ 01-TT PHIẾU THU ============================ */
 function receipt(v, company, names) {
   const amount = voucherAmount(v);
+  const bank = isBank(v);
   return `
-  ${header(company, v, 'PHIẾU THU')}
+  ${header(company, { formNo: 'Mẫu số 01 - TT', internal: bank })}
+  ${titleBlock('PHIẾU THU', v, {
+    sub: bank ? '(Thu qua tài khoản ngân hàng)' : '',
+    meta: [['Quyển số', v.bookNo || company.bookNo || ''], ['Số', v.no || '(chưa cấp số)'], ['Nợ', moneyAccount(v)], ['Có', v.credit || '131']],
+  })}
   <div class="body">
-    ${line('Họ và tên người nộp tiền:', dots(v.person))}
-    ${line('Địa chỉ:', dots(v.address || v.position))}
-    ${line('Lý do nộp:', dots(v.reason))}
-    ${line('Số tiền:', `<b>${money(amount)} đồng</b>`)}
-    ${line('(Viết bằng chữ):', `<i>${esc(moneyToWords(amount))}</i>`)}
-    ${line('Kèm theo:', `${dots(v.attachedDocs, 10)} <span class="lb">Chứng từ gốc.</span>`)}
+    ${f('Họ và tên người nộp tiền:', v.person)}
+    ${f('Địa chỉ:', v.address || v.position)}
+    ${f('Lý do nộp:', v.reason)}
+    ${f('Số tiền:', `<b>${money(amount)} đồng</b>`, { raw: true })}
+    ${f('(Viết bằng chữ):', `<i>${esc(words(amount))}</i>`, { raw: true })}
+    ${f('Kèm theo:', `${esc(v.attachedDocs || '')}${v.attachedDocs ? ' chứng từ gốc' : ''}`, { raw: true })}
   </div>
   ${signatures(
-    [
-      { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
-      { role: 'Kế toán trưởng', name: company.chiefAccountant },
-      { role: 'Người nộp tiền', name: v.person },
-      { role: 'Người lập phiếu', name: names.preparer },
-      { role: 'Thủ quỹ', name: company.cashier },
-    ],
+    bank
+      ? [
+          { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+          { role: 'Kế toán trưởng', name: company.chiefAccountant },
+          { role: 'Người lập phiếu', name: names.preparer },
+        ]
+      : [
+          { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+          { role: 'Kế toán trưởng', name: company.chiefAccountant },
+          { role: 'Người nộp tiền', name: v.person },
+          { role: 'Người lập phiếu', name: names.preparer },
+          { role: 'Thủ quỹ', name: company.cashier },
+        ],
     v.date,
   )}
-  <div class="foot">
-    ${line('Đã nhận đủ số tiền (viết bằng chữ):', '<span class="dots">' + '.'.repeat(90) + '</span>')}
-    ${line('+ Tỷ giá ngoại tệ (vàng bạc, đá quý):', '<span class="dots">' + '.'.repeat(40) + '</span>')}
-    ${line('+ Số tiền quy đổi:', '<span class="dots">' + '.'.repeat(60) + '</span>')}
-  </div>`;
+  ${bank ? '' : cashFoot()}`;
 }
 
-/* ---------------- 02-TT PHIẾU CHI ---------------- */
+/* ============================ 02-TT PHIẾU CHI ============================ */
 function payment(v, company, names) {
   const amount = voucherAmount(v);
+  const bank = isBank(v);
+  const partialNote = isPartial(v) ? `Duyệt chi một phần — số đề nghị ${money(requestedAmount(v))} đồng${v.approvalNote ? `. ${v.approvalNote}` : ''}` : '';
   return `
-  ${header(company, v, 'PHIẾU CHI')}
+  ${header(company, { formNo: 'Mẫu số 02 - TT', internal: bank })}
+  ${titleBlock(bank ? 'LỆNH CHI' : 'PHIẾU CHI', v, {
+    sub: bank ? '(Chi bằng chuyển khoản)' : '',
+    meta: [['Quyển số', v.bookNo || company.bookNo || ''], ['Số', v.no || '(chưa cấp số)'], ['Nợ', v.debit || '642'], ['Có', moneyAccount(v)]],
+  })}
   <div class="body">
-    ${line('Họ và tên người nhận tiền:', dots(v.person))}
-    ${line('Địa chỉ:', dots(v.address || v.position))}
-    ${line('Lý do chi:', dots(v.reason))}
-    ${line('Số tiền:', `<b>${money(amount)} đồng</b>`)}
-    ${line('(Viết bằng chữ):', `<i>${esc(moneyToWords(amount))}</i>`)}
-    ${isPartial(v) ? line('Ghi chú:', `Duyệt chi một phần — số đề nghị ${money(requestedAmount(v))} đồng${v.approvalNote ? `. ${esc(v.approvalNote)}` : ''}`) : ''}
-    ${line('Kèm theo:', `${dots(v.attachedDocs, 10)} <span class="lb">Chứng từ gốc.</span>`)}
+    ${f(bank ? 'Đơn vị / người nhận tiền:' : 'Họ và tên người nhận tiền:', v.person)}
+    ${f('Địa chỉ:', v.address || v.position)}
+    ${f('Lý do chi:', v.reason)}
+    ${f('Số tiền:', `<b>${money(amount)} đồng</b>`, { raw: true })}
+    ${f('(Viết bằng chữ):', `<i>${esc(words(amount))}</i>`, { raw: true })}
+    ${partialNote ? f('Ghi chú:', partialNote) : ''}
+    ${f('Kèm theo:', `${esc(v.attachedDocs || '')}${v.attachedDocs ? ' chứng từ gốc' : ''}`, { raw: true })}
   </div>
+  ${bank ? payeeBlock(v) : ''}
   ${signatures(
-    [
-      { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
-      { role: 'Kế toán trưởng', name: company.chiefAccountant },
-      { role: 'Thủ quỹ', name: company.cashier },
-      { role: 'Người lập phiếu', name: names.preparer },
-      { role: 'Người nhận tiền', name: v.person },
-    ],
+    bank
+      ? [
+          { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+          { role: 'Kế toán trưởng', name: company.chiefAccountant },
+          { role: 'Người lập phiếu', name: names.preparer },
+        ]
+      : [
+          { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+          { role: 'Kế toán trưởng', name: company.chiefAccountant },
+          { role: 'Thủ quỹ', name: company.cashier },
+          { role: 'Người lập phiếu', name: names.preparer },
+          { role: 'Người nhận tiền', name: v.person },
+        ],
     v.date,
   )}
-  <div class="foot">
-    ${line('Đã nhận đủ số tiền (viết bằng chữ):', '<span class="dots">' + '.'.repeat(90) + '</span>')}
-    ${line('+ Tỷ giá ngoại tệ (vàng bạc, đá quý):', '<span class="dots">' + '.'.repeat(40) + '</span>')}
-    ${line('+ Số tiền quy đổi:', '<span class="dots">' + '.'.repeat(60) + '</span>')}
-  </div>`;
+  ${bank ? '' : cashFoot()}`;
 }
 
-/* ---------------- 03-TT GIẤY ĐỀ NGHỊ TẠM ỨNG ---------------- */
+/* ============================ 03-TT GIẤY ĐỀ NGHỊ TẠM ỨNG ============================ */
 function advanceRequest(v, company) {
   const amount = requestedAmount(v);
   const approved = voucherAmount(v);
   return `
-  ${header(company, v, 'GIẤY ĐỀ NGHỊ TẠM ỨNG')}
+  ${header(company, { formNo: 'Mẫu số 03 - TT' })}
+  ${titleBlock('GIẤY ĐỀ NGHỊ TẠM ỨNG', v)}
   <div class="body">
-    ${line('Kính gửi:', esc(company.addressee))}
-    ${line('Tên tôi là:', dots(v.person))}
-    ${line('Bộ phận (hoặc địa chỉ):', dots(v.position || v.address))}
-    ${line('Đề nghị cho tạm ứng số tiền:', `<b>${money(amount)} đồng</b>`)}
-    ${line('(Viết bằng chữ):', `<i>${esc(moneyToWords(amount))}</i>`)}
-    ${isPartial(v) ? line('Số tiền được duyệt tạm ứng:', `<b>${money(approved)} đồng</b> <i>(${esc(moneyToWords(approved))})</i>${v.approvalNote ? ` — ${esc(v.approvalNote)}` : ''}`) : ''}
-    ${line('Lý do tạm ứng:', dots(v.reason))}
-    ${line('Thời hạn thanh toán:', v.dueDate ? esc(shortDate(v.dueDate)) : dots(''))}
+    <div class="to">Kính gửi: <b>${esc(company.addressee || 'Giám đốc Công ty')}</b></div>
+    ${f('Tên tôi là:', v.person)}
+    ${f('Bộ phận (hoặc địa chỉ):', v.position || v.address)}
+    ${f('Đề nghị cho tạm ứng số tiền:', `<b>${money(amount)} đồng</b>`, { raw: true })}
+    ${f('(Viết bằng chữ):', `<i>${esc(words(amount))}</i>`, { raw: true })}
+    ${isPartial(v) ? f('Số tiền được duyệt tạm ứng:', `<b>${money(approved)} đồng</b> <i>(${esc(words(approved))})</i>${v.approvalNote ? ` — ${esc(v.approvalNote)}` : ''}`, { raw: true }) : ''}
+    ${f('Lý do tạm ứng:', v.reason)}
+    ${f('Thời hạn thanh toán:', v.dueDate ? shortDate(v.dueDate) : '')}
+    ${f('Hình thức nhận tạm ứng:', isBank(v) ? 'Chuyển khoản' : 'Tiền mặt')}
   </div>
+  ${isBank(v) ? payeeBlock(v, approved) : ''}
   ${signatures(
     [
       { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
@@ -184,9 +251,11 @@ function advanceRequest(v, company) {
   )}`;
 }
 
-/* ---------------- 05-TT GIẤY ĐỀ NGHỊ THANH TOÁN ---------------- */
+/* ============================ 05-TT GIẤY ĐỀ NGHỊ THANH TOÁN ============================ */
 function paymentRequest(v, company) {
   const s = settlement(v);
+  const partial = isPartial(v);
+  const listed = requestedAmount(v);
   const items = v.items || [];
   const rows = items
     .map(
@@ -200,59 +269,54 @@ function paymentRequest(v, company) {
       </tr>`,
     )
     .join('');
-  const partial = isPartial(v);
-  const listed = requestedAmount(v);
   let settle = '';
   if (s.B > 0) {
     settle = `
-    <table class="settle">
+    <table class="grid settle">
       ${partial ? `<tr><td>Tổng số tiền chi theo bảng kê</td><td class="r">${money(listed)}</td></tr>` : ''}
-      <tr><td>${partial ? 'Số tiền được duyệt thanh toán' : 'Tổng số tiền chi theo bảng kê'} <b>(A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>
+      <tr><td>${partial ? 'Số tiền được duyệt thanh toán' : 'Tổng số tiền đề nghị thanh toán'} <b>(A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>
       <tr><td>Số tiền đã tạm ứng <b>(B)</b>${v.advanceNo ? ` — theo Giấy đề nghị tạm ứng số <b>${esc(v.advanceNo)}</b>` : ''}</td><td class="r"><b>${money(s.B)}</b></td></tr>
       ${
         s.refund > 0
-          ? `<tr class="hl"><td>Số tạm ứng chi không hết (B − A) — nộp lại quỹ</td><td class="r"><b>${money(s.refund)}</b></td></tr>`
+          ? `<tr class="hl"><td>Số tạm ứng chi không hết (B − A) — nộp lại ${isBank(v) ? 'qua chuyển khoản' : 'quỹ'}</td><td class="r"><b>${money(s.refund)}</b></td></tr>`
           : s.extra > 0
-            ? `<tr class="hl"><td>Chi quá số tạm ứng (A − B) — đề nghị chi bổ sung</td><td class="r"><b>${money(s.extra)}</b></td></tr>`
+            ? `<tr class="hl"><td>Chi quá số tạm ứng (A − B) — đề nghị chi bổ sung${isBank(v) ? ' bằng chuyển khoản' : ''}</td><td class="r"><b>${money(s.extra)}</b></td></tr>`
             : `<tr class="hl"><td>Chênh lệch</td><td class="r"><b>0</b></td></tr>`
       }
     </table>`;
   }
-  const diffWords =
-    s.B > 0
-      ? s.refund > 0
-        ? `Số tạm ứng chi không hết (viết bằng chữ): <i>${esc(moneyToWords(s.refund))}</i>`
-        : s.extra > 0
-          ? `Số chi quá tạm ứng (viết bằng chữ): <i>${esc(moneyToWords(s.extra))}</i>`
-          : ''
-      : '';
+  const diff = s.B > 0 ? (s.refund > 0 ? ['Số tạm ứng chi không hết (viết bằng chữ):', s.refund] : s.extra > 0 ? ['Số chi quá tạm ứng (viết bằng chữ):', s.extra] : null) : null;
+  const payOut = s.B > 0 ? s.extra : s.A;
   return `
-  ${header(company, v, 'GIẤY ĐỀ NGHỊ THANH TOÁN')}
+  ${header(company, { formNo: 'Mẫu số 05 - TT' })}
+  ${titleBlock('GIẤY ĐỀ NGHỊ THANH TOÁN', v)}
   <div class="body">
-    ${line('Kính gửi:', esc(company.addressee))}
-    ${line('Họ và tên người đề nghị thanh toán:', dots(v.person))}
-    ${line('Bộ phận (hoặc địa chỉ):', dots(v.position || v.address))}
-    ${line('Nội dung thanh toán:', dots(v.reason))}
+    <div class="to">Kính gửi: <b>${esc(company.addressee || 'Giám đốc Công ty')}</b></div>
+    ${f('Họ và tên người đề nghị thanh toán:', v.person)}
+    ${f('Bộ phận (hoặc địa chỉ):', v.position || v.address)}
+    ${f('Nội dung thanh toán:', v.reason)}
   </div>
-  <table class="items">
-    <thead><tr><th style="width:7%">TT</th><th>Tên chi phí</th><th style="width:9%">ĐVT</th><th style="width:9%">SL</th><th style="width:15%">Đơn giá</th><th style="width:17%">Thành tiền</th></tr></thead>
+  <table class="grid items">
+    <thead><tr><th style="width:8%">TT</th><th>Nội dung chi</th><th style="width:10%">ĐVT</th><th style="width:9%">SL</th><th style="width:16%">Đơn giá</th><th style="width:18%">Thành tiền</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td colspan="5" class="r"><b>Tổng cộng${partial ? '' : ' (A)'}</b></td><td class="r"><b>${money(listed)}</b></td></tr>${
-      partial ? `<tr><td colspan="5" class="r"><b>Số tiền được duyệt thanh toán (A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>` : ''
-    }</tfoot>
+    <tfoot>
+      <tr><td colspan="5" class="r"><b>Tổng cộng${partial ? '' : ' (A)'}</b></td><td class="r"><b>${money(listed)}</b></td></tr>
+      ${partial ? `<tr><td colspan="5" class="r"><b>Số tiền được duyệt thanh toán (A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>` : ''}
+    </tfoot>
   </table>
   <div class="body">
-    ${line(partial ? 'Số tiền được duyệt (viết bằng chữ):' : 'Số tiền (viết bằng chữ):', `<i>${esc(moneyToWords(s.A))}</i>`)}
-    ${partial && v.approvalNote ? line('Ghi chú duyệt:', esc(v.approvalNote)) : ''}
+    ${f(partial ? 'Số tiền được duyệt (viết bằng chữ):' : 'Số tiền (viết bằng chữ):', `<i>${esc(words(s.A))}</i>`, { raw: true })}
+    ${partial && v.approvalNote ? f('Ghi chú duyệt:', v.approvalNote) : ''}
   </div>
   ${settle}
-  ${diffWords ? `<div class="body">${line('', diffWords)}</div>` : ''}
-  <div class="body">${line('(Kèm theo', `${dots(v.attachedDocs, 8)} <span class="lb">chứng từ gốc)</span>`)}</div>
+  ${diff ? `<div class="body">${f(diff[0], `<i>${esc(words(diff[1]))}</i>`, { raw: true })}</div>` : ''}
+  <div class="body">${f('Hình thức thanh toán:', isBank(v) ? 'Chuyển khoản' : 'Tiền mặt')}${f('Kèm theo:', `${esc(v.attachedDocs || '')}${v.attachedDocs ? ' chứng từ gốc' : ''}`, { raw: true })}</div>
+  ${isBank(v) && payOut > 0 ? payeeBlock(v, payOut) : ''}
   ${signatures(
     [
-      { role: 'Người đề nghị', name: v.person },
-      { role: 'Kế toán', name: company.chiefAccountant },
-      { role: 'Giám đốc', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+      { role: 'Người đề nghị thanh toán', name: v.person },
+      { role: 'Kế toán trưởng', name: company.chiefAccountant },
+      { role: 'Người duyệt', hint: 'Ký, họ tên, đóng dấu', name: company.director },
     ],
     null,
   )}`;
@@ -265,60 +329,77 @@ function renderDoc(v, company, names) {
   return paymentRequest(v, company);
 }
 
-/* ---------------- TRANG 1: BẢNG KÊ ĐỢT KẾT CHUYỂN ---------------- */
+/* ============================ BẢNG KÊ ĐỢT KẾT CHUYỂN ============================ */
 const SHORT = { PT: 'Phiếu thu', PC: 'Phiếu chi', TU: 'GĐ tạm ứng', TT: 'GĐ thanh toán' };
 
 function batchSummary(batch, docs, company, names, cash) {
-  const rows = ledgerLines(docs).map((l, idx) => {
+  const lines = ledgerLines(docs);
+  const hasBank = lines.some((l) => !l.info && (l.debit === '1121' || l.credit === '1121'));
+  const sum = { ci: 0, co: 0, bi: 0, bo: 0 };
+  const rows = lines.map((l, idx) => {
     const d = l.doc;
-    const thu = !l.info && l.debit === '1111' ? l.amount : 0;
-    const chi = !l.info && l.credit === '1111' ? l.amount : 0;
+    const ci = !l.info && l.debit === '1111' ? l.amount : 0;
+    const co = !l.info && l.credit === '1111' ? l.amount : 0;
+    const bi = !l.info && l.debit === '1121' ? l.amount : 0;
+    const bo = !l.info && l.credit === '1121' ? l.amount : 0;
+    sum.ci += ci;
+    sum.co += co;
+    sum.bi += bi;
+    sum.bo += bo;
+    const note = l.info ? `<div class="tag">${money(voucherAmount(d))} đ — thanh toán qua phiếu ${d.type === 'TU' ? 'chi' : 'thu / chi'} tự động</div>` : '';
     return `<tr${l.info ? ' class="info"' : ''}>
         <td class="c">${idx + 1}</td>
-        <td class="nw">${esc(d.no)}</td>
-        <td class="c nw">${esc(shortDate(d.date))}</td>
-        <td>${esc(SHORT[d.type] || '')}${d.auto ? ' <span class="tag">(tự động)</span>' : ''}</td>
-        <td>${esc(d.person)}</td>
-        <td>${esc(d.reason)}${l.info ? ` <span class="tag">(${money(voucherAmount(d))} đ — thanh toán qua phiếu ${d.type === 'TU' ? 'chi' : 'thu / chi'} tự động)</span>` : ''}</td>
-        <td class="c">${esc(l.debit)}</td>
-        <td class="c">${esc(l.credit)}</td>
-        <td class="r">${thu ? money(thu) : ''}</td>
-        <td class="r">${chi ? money(chi) : ''}</td>
+        <td><b class="nw">${esc(d.no)}</b><div class="tag">${esc(shortDate(d.date))} · ${esc(SHORT[d.type] || '')}${d.auto ? ' (tự động)' : ''}</div></td>
+        <td><b>${esc(d.person)}</b> — ${esc(d.reason)}${note}</td>
+        <td class="c nw">${l.debit || l.credit ? `${esc(l.debit)}/${esc(l.credit)}` : ''}</td>
+        <td class="r">${ci ? money(ci) : ''}</td>
+        <td class="r">${co ? money(co) : ''}</td>
+        ${hasBank ? `<td class="r">${bi ? money(bi) : ''}</td><td class="r">${bo ? money(bo) : ''}</td>` : ''}
       </tr>`;
   });
-  const cashRows =
-    cash && Number.isFinite(cash.before)
-      ? `<tr><td>Tồn quỹ tiền mặt trước kết chuyển</td><td class="r">${money(cash.before)}</td></tr>
-         <tr><td>Tồn quỹ tiền mặt sau kết chuyển</td><td class="r"><b>${money(cash.before + batch.net)}</b></td></tr>`
-      : '';
+  const cashBefore = cash && Number.isFinite(cash.before) ? cash.before : null;
+  const bankBefore = Number.isFinite(batch.bankBalanceBefore) ? batch.bankBalanceBefore : null;
+  const cell = (n) => (n === null ? '' : money(n));
+  const signed = (n) => `${n < 0 ? '−' : ''}${money(Math.abs(n))}`;
+  const bankName = batch.payBank ? `${esc(batch.payBank.name)}${batch.payBank.accountNo ? ` · ${esc(batch.payBank.accountNo)}` : ''}` : '';
   return `
-  <div class="hd">
+  <header class="hd">
     <div class="org">
-      <div><b>${esc(company.companyName)}</b></div>
-      <div>${esc(company.address)}</div>
+      <div>Đơn vị: <b>${esc(company.companyName)}</b></div>
+      <div>Địa chỉ: ${esc(company.address)}</div>
     </div>
-    <div class="form"><div class="form-no">Đợt ${esc(batch.code)}</div></div>
-  </div>
-  <div class="title-mid single">
-    <h1>BẢNG KÊ CHỨNG TỪ KẾT XUẤT &amp; KẾT CHUYỂN</h1>
-    <div class="date">Ngày kết chuyển: ${esc(shortDate(batch.postDate))} · Người thực hiện: ${esc(names.poster || '')}</div>
-  </div>
-  <table class="kpi">
-    <tr>
-      <td><span>Số phiếu thu</span><b>${batch.receiptsCount}</b></td>
-      <td><span>Tổng thu</span><b>${money(batch.receiptsTotal)}</b></td>
-      <td><span>Số phiếu chi</span><b>${batch.paymentsCount}</b></td>
-      <td><span>Tổng chi</span><b>${money(batch.paymentsTotal)}</b></td>
-      <td><span>Chênh lệch (thu − chi)</span><b>${batch.net < 0 ? '−' : ''}${money(Math.abs(batch.net))}</b></td>
-    </tr>
+    <div class="form"><div class="form-no">Đợt ${esc(batch.code)}</div><div class="form-reg">Ngày kết chuyển ${esc(shortDate(batch.postDate))}</div></div>
+  </header>
+  <div class="tt single"><div class="mid">
+    <h1>BẢNG KÊ CHỨNG TỪ KẾT CHUYỂN</h1>
+    <div class="date">Thu – chi tiền mặt (TK 111) và tiền gửi ngân hàng (TK 112)</div>
+  </div></div>
+  <table class="grid sum">
+    <thead><tr><th style="width:30%"></th><th>Thu / nhận</th><th>Chi</th><th>Chênh lệch</th><th>Số dư trước</th><th>Số dư sau</th></tr></thead>
+    <tbody>
+      <tr><td><b>Tiền mặt</b> (111)</td><td class="r">${money(sum.ci)}</td><td class="r">${money(sum.co)}</td><td class="r">${signed(sum.ci - sum.co)}</td><td class="r">${cell(cashBefore)}</td><td class="r"><b>${cashBefore === null ? '' : money(cashBefore + sum.ci - sum.co)}</b></td></tr>
+      ${
+        hasBank
+          ? `<tr><td><b>Tiền gửi ngân hàng</b> (112)${bankName ? `<div class="tag">${bankName}</div>` : ''}</td><td class="r">${money(sum.bi)}</td><td class="r">${money(sum.bo)}</td><td class="r">${signed(sum.bi - sum.bo)}</td><td class="r">${cell(bankBefore)}</td><td class="r"><b>${bankBefore === null ? '' : money(bankBefore + sum.bi - sum.bo)}</b></td></tr>`
+          : ''
+      }
+      <tr class="tot"><td><b>Cộng dòng tiền</b></td><td class="r"><b>${money(sum.ci + sum.bi)}</b></td><td class="r"><b>${money(sum.co + sum.bo)}</b></td><td class="r"><b>${signed(sum.ci + sum.bi - sum.co - sum.bo)}</b></td><td></td><td></td></tr>
+    </tbody>
   </table>
-  <table class="items list">
-    <thead><tr><th style="width:5%">STT</th><th style="width:14%">Số CT</th><th style="width:9%">Ngày</th><th style="width:10%">Loại</th><th style="width:13%">Người nộp / nhận</th><th>Diễn giải</th><th style="width:5.5%">Nợ</th><th style="width:5.5%">Có</th><th style="width:10%">Thu</th><th style="width:10%">Chi</th></tr></thead>
+  <table class="grid list">
+    <colgroup><col style="width:5%"/><col style="width:15%"/><col/><col style="width:9.5%"/>${(hasBank ? [10.5, 10.5, 10.5, 10.5] : [13, 13]).map((w) => `<col style="width:${w}%"/>`).join('')}</colgroup>
+    <thead>
+      <tr>
+        <th rowspan="2">STT</th><th rowspan="2">Số chứng từ</th><th rowspan="2">Đối tượng – diễn giải</th>
+        <th rowspan="2">TK Nợ/Có</th>
+        <th colspan="2">Tiền mặt (111)</th>${hasBank ? '<th colspan="2">Ngân hàng (112)</th>' : ''}
+      </tr>
+      <tr><th>Thu</th><th>Chi</th>${hasBank ? '<th>Nhận</th><th>Chi</th>' : ''}</tr>
+    </thead>
     <tbody>${rows.join('')}</tbody>
-    <tfoot><tr><td colspan="8" class="r"><b>Cộng</b></td><td class="r"><b>${money(batch.receiptsTotal)}</b></td><td class="r"><b>${money(batch.paymentsTotal)}</b></td></tr></tfoot>
+    <tfoot><tr><td colspan="4" class="r"><b>Cộng</b></td><td class="r"><b>${money(sum.ci)}</b></td><td class="r"><b>${money(sum.co)}</b></td>${hasBank ? `<td class="r"><b>${money(sum.bi)}</b></td><td class="r"><b>${money(sum.bo)}</b></td>` : ''}</tr></tfoot>
   </table>
-  ${cashRows ? `<table class="settle narrow">${cashRows}</table>` : ''}
-  <div class="note">Các chứng từ trong đợt đã được ghi sổ quỹ tiền mặt và khóa sửa. Muốn điều chỉnh phải dùng chức năng "Hủy kết chuyển" (bút toán đảo) của Chủ doanh nghiệp.</div>
+  <div class="note">Các chứng từ trong đợt đã được ghi sổ (tiền mặt vào Sổ quỹ, chuyển khoản vào số dư tiền gửi) và khóa sửa. Điều chỉnh bằng chức năng “Hủy kết chuyển” (bút toán đảo) của Chủ doanh nghiệp.</div>
   ${signatures(
     [
       { role: 'Người lập', name: names.poster },
@@ -329,85 +410,153 @@ function batchSummary(batch, docs, company, names, cash) {
   )}`;
 }
 
-function attachmentPages(files, landscapeHalf) {
-  const imgs = files.filter((f) => String(f.type || '').startsWith('image/'));
+/* ============================ BẢNG KÊ LỆNH CHUYỂN KHOẢN ============================ */
+function bankOrderList(batch, docs, company, names) {
+  const list = bankPayments(docs);
+  if (!list.length) return '';
+  const total = list.reduce((t, p) => t + p.amount, 0);
+  const pb = batch?.payBank || {};
+  const rows = list
+    .map(
+      (p, i) => `<tr>
+      <td class="c">${i + 1}</td>
+      <td><b>${esc(p.payee)}</b>${p.taxCode ? `<div class="tag">MST: ${esc(p.taxCode)}</div>` : ''}<div class="tag">${esc(p.no)} · ${esc(SHORT[p.doc.type] || '')}</div></td>
+      <td class="acct">${esc(p.account)}</td>
+      <td>${esc(p.bank)}${p.branch ? `<div class="tag">${esc(p.branch)}</div>` : ''}</td>
+      <td class="r"><b>${money(p.amount)}</b></td>
+      <td>${esc(p.content)}</td>
+    </tr>`,
+    )
+    .join('');
+  return `
+  <header class="hd">
+    <div class="org">
+      <div>Đơn vị: <b>${esc(company.companyName)}</b></div>
+      <div>Địa chỉ: ${esc(company.address)}</div>
+      ${company.taxCode ? `<div>Mã số thuế: ${esc(company.taxCode)}</div>` : ''}
+    </div>
+    <div class="form">${batch ? `<div class="form-no">Kèm đợt ${esc(batch.code)}</div><div class="form-reg">Ngày ${esc(shortDate(batch.postDate))}</div>` : ''}</div>
+  </header>
+  <div class="tt single"><div class="mid">
+    <h1>BẢNG KÊ LỆNH CHUYỂN KHOẢN</h1>
+    <div class="date">${batch ? longDate(batch.postDate) : ''}</div>
+  </div></div>
+  <div class="body">
+    ${f('Đơn vị trả tiền:', `<b>${esc(pb.accountName || company.companyName)}</b>`, { raw: true })}
+    ${f('Tài khoản trích nợ:', pb.accountNo ? `<b class="acct">${esc(pb.accountNo)}</b> tại ${esc(pb.name || '')}` : esc(pb.name || ''), { raw: true })}
+    ${f('Số món / tổng tiền:', `<b>${list.length} món — ${money(total)} đồng</b>`, { raw: true })}
+  </div>
+  <table class="grid bank">
+    <thead><tr><th style="width:6%">STT</th><th style="width:25%">Đơn vị / người thụ hưởng</th><th style="width:17%">Số tài khoản</th><th style="width:17%">Ngân hàng – chi nhánh</th><th style="width:14%">Số tiền (đ)</th><th>Nội dung chuyển khoản</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="4" class="r"><b>Tổng cộng</b></td><td class="r"><b>${money(total)}</b></td><td></td></tr></tfoot>
+  </table>
+  <div class="body">${f('Số tiền bằng chữ:', `<i>${esc(words(total))}</i>`, { raw: true })}</div>
+  <div class="note">Kế toán đối chiếu tên chủ tài khoản và số tài khoản trước khi lập lệnh trên ngân hàng điện tử (có thể nhập từ file Excel kèm theo). Sau khi chuyển, lưu ủy nhiệm chi / sao kê ngân hàng cùng bảng kê này.</div>
+  ${signatures(
+    [
+      { role: 'Người lập', name: names.poster },
+      { role: 'Kế toán trưởng', name: company.chiefAccountant },
+      { role: 'Giám đốc (chủ tài khoản)', hint: 'Ký, họ tên, đóng dấu', name: company.director },
+    ],
+    batch?.postDate || null,
+  )}`;
+}
+
+function attachmentPages(files) {
+  const imgs = files.filter((x) => String(x.type || '').startsWith('image/'));
   const out = [];
   for (let i = 0; i < imgs.length; i += 2) {
     const pair = imgs.slice(i, i + 2);
     out.push(`<section class="page a4 att">${pair
-      .map((f) => `<figure><img src="${f.dataUrl}" alt=""/><figcaption>${esc(f.voucherNo || '')} — ${esc(f.name)}</figcaption></figure>`)
+      .map((x) => `<figure><img src="${x.dataUrl}" alt=""/><figcaption>${esc(x.voucherNo || '')} — ${esc(x.name)}</figcaption></figure>`)
       .join('')}</section>`);
   }
-  void landscapeHalf;
   return out.join('');
 }
 
-const CSS = `
+const css = (base) => `
+@font-face { font-family: "Waasee Serif"; src: url("${base}WaaseeSerif-Regular.woff") format("woff"); font-weight: 400; font-style: normal; }
+@font-face { font-family: "Waasee Serif"; src: url("${base}WaaseeSerif-Bold.woff") format("woff"); font-weight: 700; font-style: normal; }
+@font-face { font-family: "Waasee Serif"; src: url("${base}WaaseeSerif-Italic.woff") format("woff"); font-weight: 400; font-style: italic; }
+@font-face { font-family: "Waasee Serif"; src: url("${base}WaaseeSerif-BoldItalic.woff") format("woff"); font-weight: 700; font-style: italic; }
 @page { size: A4 portrait; margin: 0; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
-body { font-family: "Times New Roman", "Noto Serif", "Liberation Serif", Tinos, serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: "Waasee Serif", "Times New Roman", Times, serif; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-kerning: normal; }
+b { font-weight: 700; }
 .page { width: 210mm; background: #fff; position: relative; break-after: page; page-break-after: always; overflow: hidden; }
 .page:last-child { break-after: auto; page-break-after: auto; }
-.a4 { min-height: 297mm; padding: 13mm 15mm 12mm; font-size: 12.5pt; }
+.a4 { min-height: 297mm; padding: 13mm 15mm 12mm 20mm; font-size: 12.5pt; line-height: 1.4; }
 .a5pair { height: 297mm; }
-.half { height: 148.5mm; padding: 7mm 11mm 5mm; font-size: 10.2pt; overflow: hidden; position: relative; }
-.half + .half { border-top: 1px dashed #888; }
-.half + .half::before { content: "✂"; position: absolute; top: -9px; left: 4mm; font-size: 12px; color: #666; background: #fff; padding: 0 2px; font-family: sans-serif; }
-.hd { display: flex; justify-content: space-between; gap: 10mm; line-height: 1.3; }
-.org { max-width: 60%; }
-.form { text-align: center; max-width: 40%; }
-.form-no { font-weight: bold; }
-.form-reg { font-size: .82em; font-style: italic; }
-.title-row { position: relative; margin-top: 4mm; min-height: 15mm; }
-.title-mid { text-align: center; padding: 0 30mm; }
-.title-row.plain { min-height: 0; }
-.title-row.plain .title-mid, .title-mid.single { padding: 0; }
-.no-line { margin-top: .5mm; }
-.title-mid.single { margin: 5mm 0 3mm; }
-h1 { font-size: 1.55em; margin: 0; letter-spacing: .5px; }
-.date { font-style: italic; margin-top: 1mm; }
-.meta { position: absolute; right: 0; top: 0; font-size: .92em; line-height: 1.45; white-space: nowrap; }
-.meta span { display: inline-block; min-width: 14mm; }
-.body { margin-top: 3mm; line-height: 1.6; }
-.half .body { margin-top: 2mm; line-height: 1.45; }
-.ln { display: flex; gap: 2mm; }
-.ln .lb { white-space: nowrap; }
-.ln .val { flex: 1; }
-.dots { color: #777; letter-spacing: 1px; overflow: hidden; }
-.sign-date { text-align: right; font-style: italic; margin-top: 4mm; padding-right: 4mm; }
-.half .sign-date { margin-top: 2mm; }
-table.sign { width: 100%; border-collapse: collapse; margin-top: 1mm; table-layout: fixed; }
+.half { height: 148.5mm; padding: 7mm 11mm 5mm 15mm; font-size: 10.5pt; line-height: 1.35; overflow: hidden; position: relative; }
+.half + .half { border-top: 1px dashed #777; }
+.half + .half::before { content: "✂"; position: absolute; top: -9px; left: 5mm; font-size: 12px; color: #555; background: #fff; padding: 0 2px; font-family: sans-serif; }
+
+.hd { display: grid; grid-template-columns: minmax(0, 1fr) 66mm; gap: 6mm; align-items: start; }
+.half .hd { grid-template-columns: minmax(0, 1fr) 54mm; gap: 4mm; }
+.org { line-height: 1.35; }
+.form { text-align: center; line-height: 1.3; }
+.form-no { font-weight: 700; }
+.form-reg { font-size: .8em; font-style: italic; }
+
+.tt { display: grid; grid-template-columns: 44mm minmax(0, 1fr) 44mm; align-items: start; margin: 5mm 0 3mm; }
+.half .tt { grid-template-columns: 38mm minmax(0, 1fr) 38mm; margin: 3mm 0 1.5mm; }
+.tt.single { display: block; text-align: center; }
+.tt .mid { text-align: center; }
+h1 { font-size: 1.45em; font-weight: 700; margin: 0; line-height: 1.2; }
+.h1-sub { font-size: .85em; font-style: italic; }
+.date { font-style: italic; margin-top: .6mm; }
+.no { margin-top: .6mm; }
+table.meta { border-collapse: collapse; font-size: .88em; margin-left: auto; line-height: 1.4; }
+table.meta td { padding: 0 0 0 1.5mm; white-space: nowrap; vertical-align: top; }
+table.meta td:first-child { padding-left: 0; }
+
+.body { margin-top: 2mm; }
+.to { text-align: left; margin: 1mm 0 1.5mm 22mm; }
+.f { display: flex; align-items: baseline; gap: 1.6mm; margin-top: 1.1mm; }
+.f .k { white-space: nowrap; }
+.f .v { flex: 1; min-width: 0; border-bottom: 1px dotted #444; min-height: 1.3em; padding: 0 1mm; overflow-wrap: anywhere; }
+.half .f { margin-top: .6mm; }
+.acct { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+
+.box { margin-top: 3mm; border: 1px solid #000; padding: 1.5mm 3mm 2.5mm; break-inside: avoid; }
+.box-t { font-weight: 700; font-size: .92em; }
+.half .box { margin-top: 2mm; padding: 1mm 2.5mm 1.5mm; }
+
+.signs { margin-top: 5mm; break-inside: avoid; page-break-inside: avoid; }
+.half .signs { margin-top: 2.5mm; }
+.sign-date { text-align: right; font-style: italic; margin-bottom: 1mm; padding-right: 3mm; }
+table.sign { width: 100%; border-collapse: collapse; table-layout: fixed; }
 table.sign td { text-align: center; vertical-align: top; padding: 0 1mm; }
-table.sign .role { font-weight: bold; }
-table.sign .hint { font-style: italic; font-size: .82em; }
-table.sign .space { height: 20mm; }
-.half table.sign .space { height: 11mm; }
-.signs { break-inside: avoid; page-break-inside: avoid; }
-.list .signs, .summary .signs { margin-top: 2mm; }
-table.items tr { break-inside: avoid; page-break-inside: avoid; }
-tr.info td { color: #555; }
-table.sign .name { font-weight: bold; min-height: 1.2em; }
-.foot { margin-top: 3mm; font-size: .92em; line-height: 1.5; }
-.half .foot { margin-top: 1mm; }
-table.items { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: .95em; }
-table.items th, table.items td { border: 1px solid #444; padding: 1.2mm 1.6mm; vertical-align: top; }
-table.items th { background: #eef1f5; font-weight: bold; text-align: center; }
-table.items.list { font-size: .76em; table-layout: fixed; }
-table.items.list td { word-wrap: break-word; }
-.summary table.sign .space { height: 14mm; }
-.summary h1 { font-size: 1.35em; }
-table.items .tag { font-size: .8em; font-style: italic; color: #555; }
+table.sign tr.role td { font-weight: 700; vertical-align: bottom; }
+.half table.sign tr.role td, .five table.sign tr.name td { font-size: .92em; }
+table.sign tr.hint td { font-style: italic; font-size: .8em; }
+table.sign tr.space td { height: 22mm; }
+.half table.sign tr.space td { height: 12mm; }
+table.sign tr.name td { font-weight: 700; }
+.foot { margin-top: 4mm; font-size: .92em; }
+.half .foot { margin-top: 1.5mm; }
+.copy-note { text-align: right; font-style: italic; font-size: .85em; margin-top: 1.5mm; }
+
+table.grid { width: 100%; border-collapse: collapse; margin-top: 3mm; }
+table.grid th, table.grid td { border: 0.75pt solid #000; padding: 1.1mm 1.6mm; vertical-align: top; }
+table.grid th { background: #efefef; font-weight: 700; text-align: center; vertical-align: middle; font-size: .92em; }
+table.grid tr { break-inside: avoid; page-break-inside: avoid; }
+table.items { font-size: .95em; }
+table.settle { margin-left: auto; }
+table.settle tr.hl td { background: #f6f6f6; }
+table.sum { font-size: .88em; }
+table.sum tr.tot td { background: #f6f6f6; }
+table.list { font-size: .78em; table-layout: fixed; }
+table.list th, table.list td { padding: .9mm 1.2mm; }
+table.list td { overflow-wrap: anywhere; }
+table.bank { font-size: .84em; table-layout: fixed; }
+table.bank td { overflow-wrap: anywhere; }
+tr.info td { color: #444; }
+.tag { font-size: .86em; color: #333; }
 .c { text-align: center; } .r { text-align: right; white-space: nowrap; } .nw { white-space: nowrap; }
-table.settle { width: 100%; border-collapse: collapse; margin-top: 3mm; }
-table.settle td { border: 1px solid #444; padding: 1.2mm 2mm; }
-table.settle.narrow { width: 60%; margin-left: auto; font-size: .9em; }
-table.settle tr.hl td { background: #fff6dc; }
-table.kpi { width: 100%; border-collapse: collapse; margin-top: 2mm; }
-table.kpi td { border: 1px solid #444; padding: 2mm; text-align: center; width: 20%; }
-table.kpi span { display: block; font-size: .78em; }
-table.kpi b { font-size: 1.05em; }
-.note { font-size: .82em; font-style: italic; margin-top: 3mm; color: #333; }
+.note { font-size: .82em; font-style: italic; margin-top: 3mm; }
 .att { display: flex; flex-direction: column; gap: 6mm; }
 .att figure { margin: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
 .att img { max-width: 100%; max-height: 125mm; object-fit: contain; border: 1px solid #ccc; }
@@ -423,43 +572,52 @@ table.kpi b { font-size: 1.05em; }
 `;
 
 /**
- * @param opts.batch    đợt kết chuyển (null khi in lẻ)
- * @param opts.docs     danh sách chứng từ theo thứ tự in (đã có số, định khoản)
- * @param opts.company  thông tin doanh nghiệp
- * @param opts.paper    'A4' | 'A5'
- * @param opts.names    { [email]: tên hiển thị }
- * @param opts.poster   tên người kết chuyển
- * @param opts.cash     { before } tồn quỹ trước kết chuyển (tùy chọn)
- * @param opts.files    ảnh chứng từ gốc in kèm (tùy chọn)
+ * @param opts.batch     đợt kết chuyển (null khi in lẻ)
+ * @param opts.docs      danh sách chứng từ theo thứ tự in (đã có số, định khoản)
+ * @param opts.company   thông tin doanh nghiệp (đã gộp phần sửa tay trước khi in)
+ * @param opts.paper     'A4' | 'A5'
+ * @param opts.names     { [email]: tên hiển thị } — để in tên người lập phiếu
+ * @param opts.preparer  tên người lập phiếu sửa tay (áp cho mọi chứng từ); trống = tự điền theo người lập
+ * @param opts.poster    tên người kết chuyển
+ * @param opts.cash      { before } tồn quỹ tiền mặt trước kết chuyển (tùy chọn)
+ * @param opts.files     ảnh chứng từ gốc in kèm (tùy chọn)
+ * @param opts.only      'all' | 'bank' — chỉ in bảng kê lệnh chuyển khoản
  */
-export function buildPrintHtml({ batch = null, docs = [], company, paper = 'A4', names = {}, poster = '', cash = null, files = [], title = 'Chứng từ' }) {
-  const preparerOf = (d) => (d.auto ? names[d.postedBy] || poster : names[d.createdBy] || d.createdByName || '');
+export function buildPrintHtml({ batch = null, docs = [], company, paper = 'A4', names = {}, preparer = '', poster = '', cash = null, files = [], title = 'Chứng từ', only = 'all', fontBase = defaultFontBase() }) {
+  const preparerOf = (d) => preparer || (d.auto ? names[d.postedBy] || poster : names[d.createdBy] || d.createdByName || '');
   const pages = [];
-  if (batch) pages.push(`<section class="page a4 summary">${batchSummary(batch, docs, company, { poster }, cash)}</section>`);
-  if (paper === 'A5') {
-    const halves = [];
-    const flush = () => {
-      if (!halves.length) return;
-      pages.push(`<section class="page a5pair">${halves.map((h) => `<div class="half">${h}</div>`).join('')}</section>`);
-      halves.length = 0;
-    };
-    for (const d of docs) {
-      const html = renderDoc(d, company, { preparer: preparerOf(d) });
-      if (fitsHalf(d)) {
-        halves.push(html);
-        if (halves.length === 2) flush();
-      } else {
-        flush();
-        pages.push(`<section class="page a4">${html}</section>`);
-      }
-    }
-    flush();
+  const bankList = bankOrderList(batch, docs, company, { poster });
+  if (only === 'bank') {
+    if (bankList) pages.push(`<section class="page a4">${bankList}</section>`);
   } else {
-    for (const d of docs) pages.push(`<section class="page a4">${renderDoc(d, company, { preparer: preparerOf(d) })}</section>`);
+    if (batch) pages.push(`<section class="page a4">${batchSummary(batch, docs, company, { poster }, cash)}</section>`);
+    if (batch && bankList) pages.push(`<section class="page a4">${bankList}</section>`);
+    if (paper === 'A5') {
+      const halves = [];
+      const flush = () => {
+        if (!halves.length) return;
+        pages.push(`<section class="page a5pair">${halves.map((h) => `<div class="half">${h}</div>`).join('')}</section>`);
+        halves.length = 0;
+      };
+      for (const d of docs) {
+        const html = renderDoc(d, company, { preparer: preparerOf(d) });
+        if (fitsHalf(d)) {
+          halves.push(html);
+          if (halves.length === 2) flush();
+        } else {
+          flush();
+          pages.push(`<section class="page a4">${html}</section>`);
+        }
+      }
+      flush();
+    } else {
+      for (const d of docs) pages.push(`<section class="page a4">${renderDoc(d, company, { preparer: preparerOf(d) })}</section>`);
+    }
+    if (!batch && bankList && docs.some((d) => isBank(d) && d.type !== 'PT' && d.status === 'POSTED')) pages.push(`<section class="page a4">${bankList}</section>`);
+    if (files.length) pages.push(attachmentPages(files));
   }
-  if (files.length) pages.push(attachmentPages(files));
-  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${CSS}</style></head>
-<body>${pages.join('\n')}
+  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${css(fontBase)}</style></head>
+<body>${pages.join('\n') || '<section class="page a4"><p>Không có nội dung để in.</p></section>'}
 <script>
 (function(){
   function fit(){ var w = document.documentElement.clientWidth; var pw = 210 * 96 / 25.4 + 16; document.body.style.zoom = w < pw ? (w / pw).toFixed(3) : ''; }
@@ -470,5 +628,8 @@ export function buildPrintHtml({ batch = null, docs = [], company, paper = 'A4',
 })();
 <\/script></body></html>`;
 }
+
+/** Có khoản chuyển khoản nào trong danh sách in không */
+export const hasBankPayments = (docs) => bankPayments(docs).length > 0;
 
 export { longDate, shortDate, accountName };

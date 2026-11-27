@@ -28,7 +28,7 @@ import {
 } from '../ui.jsx';
 
 export const pickRaw = (row, keys) => Object.fromEntries(keys.map((k) => [k, row[k]]));
-export const BANK_KEYS = ['id', 'name', 'creditLimit', 'depositBalance', 'note', '_auditId'];
+export const BANK_KEYS = ['id', 'name', 'creditLimit', 'depositBalance', 'accountNo', 'accountName', 'note', '_auditId'];
 export const LOAN_KEYS = ['id', 'bankId', 'contractNo', 'amount', 'disbursedDate', 'interestRate', 'maturityDate', 'status', 'settledDate', 'purpose', 'note', '_auditId'];
 
 export function daysTone(d) {
@@ -52,6 +52,8 @@ export function BankModal({ open, onClose, initial }) {
       name: initial?.name || '',
       creditLimit: initial?.creditLimit || 0,
       depositBalance: initial?.depositBalance || 0,
+      accountNo: initial?.accountNo || '',
+      accountName: initial?.accountName || '',
       note: initial?.note || '',
     });
   }, [open, initial]);
@@ -68,6 +70,8 @@ export function BankModal({ open, onClose, initial }) {
       name: f.name.trim(),
       creditLimit: Math.round(Number(f.creditLimit) || 0),
       depositBalance: Math.round(Number(f.depositBalance) || 0),
+      accountNo: String(f.accountNo || '').replace(/\s+/g, '').slice(0, 40),
+      accountName: String(f.accountName || '').trim().slice(0, 200),
       note: f.note.trim(),
     };
     setBusy(true);
@@ -108,6 +112,12 @@ export function BankModal({ open, onClose, initial }) {
         </Field>
         <Field label="Số dư tiền gửi thanh toán (nếu có)" hint="Dùng để tính thanh khoản khả dụng">
           <MoneyInput value={f.depositBalance} onChange={set('depositBalance')} />
+        </Field>
+        <Field label="Số tài khoản thanh toán của công ty" hint="In trên lệnh chuyển khoản khi kết chuyển chứng từ">
+          <Input value={f.accountNo} onChange={set('accountNo')} inputMode="numeric" placeholder="VD: 0021000123456" />
+        </Field>
+        <Field label="Tên chủ tài khoản" hint="Để trống = tên công ty">
+          <Input value={f.accountName} onChange={set('accountName')} />
         </Field>
         <Field label="Ghi chú" className="sm:col-span-2">
           <Textarea value={f.note} onChange={set('note')} placeholder="Tài sản bảo đảm, cán bộ tín dụng phụ trách…" />

@@ -116,8 +116,30 @@ export function settlement(v) {
   return { A, B, cleared: Math.min(A, B), refund: Math.max(0, B - A), extra: Math.max(0, A - B) };
 }
 
-/** Ảnh hưởng tới quỹ tiền mặt khi kết chuyển: { in, out } */
-export function cashEffect(v) {
+/* ------------------------------------------------------------------ */
+/*  Hình thức thanh toán: tiền mặt (1111) hoặc chuyển khoản (1121)       */
+/*  Dòng tiền = tiền mặt + tiền gửi ngân hàng. Mọi loại chứng từ chọn      */
+/*  được hình thức; GĐNTT: cả phần chi bổ sung lẫn tiền hoàn ứng đi theo  */
+/*  hình thức đã chọn.                                                     */
+/* ------------------------------------------------------------------ */
+export const PAY_TYPES = ['TU', 'TT', 'PC', 'PT'];
+export const PAY_METHOD = { CASH: 'Tiền mặt', BANK: 'Chuyển khoản' };
+export const isBank = (v) => !!v && PAY_TYPES.includes(v.type) && v.payMethod === 'BANK';
+/** Tài khoản tiền theo hình thức */
+export const moneyAccount = (v) => (isBank(v) ? '1121' : '1111');
+
+/** Số tiền phải chi ra (chưa tính hình thức): TU/PC = số tiền; TT = A (không ứng) hoặc phần chi quá tạm ứng */
+function outAmount(v) {
+  if (v?.type === 'PC' || v?.type === 'TU') return voucherAmount(v);
+  if (v?.type === 'TT') {
+    const s = settlement(v);
+    return s.B > 0 ? s.extra : s.A;
+  }
+  return 0;
+}
+
+/** Tiền vào / ra khi kết chuyển, chưa phân theo hình thức */
+export function flowEffect(v) {
   switch (v?.type) {
     case 'PT':
       return { in: voucherAmount(v), out: 0 };
@@ -126,11 +148,60 @@ export function cashEffect(v) {
       return { in: 0, out: voucherAmount(v) };
     case 'TT': {
       const s = settlement(v);
-      return s.B > 0 ? { in: s.refund, out: s.extra } : { in: 0, out: s.A };
+      return { in: s.B > 0 ? s.refund : 0, out: outAmount(v) };
     }
     default:
       return { in: 0, out: 0 };
   }
+}
+
+/** Ảnh hưởng tới quỹ tiền mặt (TK 111) khi kết chuyển: { in, out } */
+export function cashEffect(v) {
+  return isBank(v) ? { in: 0, out: 0 } : flowEffect(v);
+}
+
+/** Ảnh hưởng tới tiền gửi ngân hàng (TK 112) khi kết chuyển: { in, out } */
+export function bankFlow(v) {
+  return isBank(v) ? flowEffect(v) : { in: 0, out: 0 };
+}
+
+/** Số tiền chi qua chuyển khoản khi kết chuyển */
+export function bankEffect(v) {
+  return bankFlow(v).out;
+}
+
+/** Không dấu, viết hoa — dùng cho nội dung chuyển khoản */
+export function plainText(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/[^A-Za-z0-9 .,\-/()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Nội dung chuyển khoản gợi ý: "<số CT> <lý do>" không dấu, tối đa 140 ký tự */
+export function transferContent(v) {
+  return plainText(`${v.no || ''} ${v.reason || ''}`).slice(0, 140);
+}
+
+/** Các khoản chuyển khoản của một đợt (theo chứng từ gốc) */
+export function bankPayments(docs = []) {
+  return docs
+    .filter((d) => !d.auto && d.type !== 'PT' && bankEffect(d) > 0)
+    .map((d) => ({
+      doc: d,
+      no: d.no,
+      payee: d.payeeName || d.person || '',
+      taxCode: d.payeeTaxCode || '',
+      account: d.payeeAccount || '',
+      bank: d.payeeBank || '',
+      branch: d.payeeBranch || '',
+      amount: bankEffect(d),
+      content: d.transferNote || transferContent(d),
+    }));
 }
 
 /** Kiểm tra dữ liệu trước khi gửi duyệt. Trả về chuỗi lỗi hoặc '' */
@@ -155,6 +226,10 @@ export function validateVoucher(v, { advances = [] } = {}) {
       if (adv && round(v.advanceAmount) > advanceRemaining(adv) + 0) return `Số đã tạm ứng vượt số còn phải quyết toán của ${adv.no || 'giấy tạm ứng'} (${advanceRemaining(adv).toLocaleString('vi-VN')} đ)`;
     }
   } else if (round(v.amount) <= 0) return 'Số tiền phải lớn hơn 0';
+  if (isBank(v) && v.type !== 'PT') {
+    if (!String(v.payeeAccount || '').trim()) return 'Chuyển khoản: nhập số tài khoản người nhận';
+    if (!String(v.payeeBank || '').trim()) return 'Chuyển khoản: nhập ngân hàng người nhận';
+  }
   if (v.type === 'PT' && !String(v.credit || '').trim()) return 'Chọn tài khoản ghi Có';
   if (v.type === 'PC' && !String(v.debit || '').trim()) return 'Chọn tài khoản ghi Nợ';
   return '';
@@ -187,11 +262,11 @@ export function countersNeeded(vouchers, postDate) {
   const keys = new Set([batchCounterKey(postDate)]);
   for (const v of vouchers) {
     if (!v.no) keys.add(counterKey(v.type, v.date));
-    if (v.type === 'TU') keys.add(counterKey('PC', postDate));
+    if (v.type === 'TU' && !isBank(v)) keys.add(counterKey('PC', postDate));
     if (v.type === 'TT') {
       const s = settlement(v);
-      if (s.B === 0 || s.extra > 0) keys.add(counterKey('PC', postDate));
-      if (s.refund > 0) keys.add(counterKey('PT', postDate));
+      if ((s.B === 0 || s.extra > 0) && !isBank(v)) keys.add(counterKey('PC', postDate));
+      if (s.refund > 0 && !isBank(v)) keys.add(counterKey('PT', postDate));
     }
   }
   return [...keys];
@@ -281,6 +356,18 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
   let receiptsTotal = 0;
   let paymentsCount = 0;
   let paymentsTotal = 0;
+  let bankCount = 0;
+  let bankTotal = 0;
+  let bankInCount = 0;
+  let bankInTotal = 0;
+  const viaBank = (amount) => {
+    bankCount += 1;
+    bankTotal += amount;
+  };
+  const intoBank = (amount) => {
+    bankInCount += 1;
+    bankInTotal += amount;
+  };
 
   for (const v of order) {
     const no = v.no || formatNo(v.type, v.date, take(counterKey(v.type, v.date)));
@@ -290,18 +377,31 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
     const cashIds = [];
     const genIds = [];
 
-    if (v.type === 'PT') {
+    if (v.type === 'PT' && isBank(v)) {
+      const amount = voucherAmount(v);
+      patch.entries = [{ debit: '1121', credit: v.credit || '131', amount }];
+      intoBank(amount);
+    } else if (v.type === 'PT') {
       const amount = voucherAmount(v);
       patch.entries = [{ debit: '1111', credit: v.credit || '141', amount }];
       cashIds.push(cashFor(v.id, seq++, 'IN', { amount, date: v.date, description: `${no} — ${v.reason}`, counterparty: v.person, voucherId: v.id, voucherNo: no }));
       receiptsCount += 1;
       receiptsTotal += amount;
+    } else if (v.type === 'PC' && isBank(v)) {
+      const amount = voucherAmount(v);
+      patch.entries = [{ debit: v.debit || '642', credit: '1121', amount }];
+      viaBank(amount);
     } else if (v.type === 'PC') {
       const amount = voucherAmount(v);
       patch.entries = [{ debit: v.debit || '642', credit: '1111', amount }];
       cashIds.push(cashFor(v.id, seq++, 'OUT', { amount, date: v.date, description: `${no} — ${v.reason}`, counterparty: v.person, voucherId: v.id, voucherNo: no }));
       paymentsCount += 1;
       paymentsTotal += amount;
+    } else if (v.type === 'TU' && isBank(v)) {
+      const amount = voucherAmount(v);
+      patch.entries = [{ debit: '141', credit: '1121', amount }];
+      patch.settledAmount = round(v.settledAmount);
+      viaBank(amount);
     } else if (v.type === 'TU') {
       const amount = voucherAmount(v);
       const g = makeGenerated({ ...v, no }, 'PC', amount, '141', '1111', `Chi tạm ứng: ${v.reason}`, `01 Giấy đề nghị tạm ứng số ${no}`);
@@ -318,7 +418,10 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
       const entries = [];
       if (s.B > 0) {
         if (s.cleared > 0) entries.push({ debit: exp, credit: '141', amount: s.cleared });
-        if (s.refund > 0) {
+        if (s.refund > 0 && isBank(v)) {
+          entries.push({ debit: '1121', credit: '141', amount: s.refund });
+          intoBank(s.refund);
+        } else if (s.refund > 0) {
           const g = makeGenerated({ ...v, no }, 'PT', s.refund, '1111', '141', `Thu hoàn ứng chi không hết theo ${no}: ${v.reason}`, `01 Giấy đề nghị thanh toán số ${no}`);
           genIds.push(g.id);
           printSet.push({ id: g.id, ...g.data });
@@ -327,7 +430,10 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
           receiptsCount += 1;
           receiptsTotal += s.refund;
         }
-        if (s.extra > 0) {
+        if (s.extra > 0 && isBank(v)) {
+          entries.push({ debit: exp, credit: '1121', amount: s.extra });
+          viaBank(s.extra);
+        } else if (s.extra > 0) {
           const g = makeGenerated({ ...v, no }, 'PC', s.extra, exp, '1111', `Chi bổ sung phần chi quá tạm ứng theo ${no}: ${v.reason}`, `01 Giấy đề nghị thanh toán số ${no}`);
           genIds.push(g.id);
           printSet.push({ id: g.id, ...g.data });
@@ -344,6 +450,9 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
           if (prev + s.B > voucherAmount(adv)) throw new Error(`Số quyết toán vượt số tạm ứng còn lại của ${adv.no}`);
           advanceUpdates[v.advanceId] = { settledAmount: prev + s.B, before: adv };
         }
+      } else if (isBank(v)) {
+        entries.push({ debit: exp, credit: '1121', amount: s.A });
+        viaBank(s.A);
       } else {
         const g = makeGenerated({ ...v, no }, 'PC', s.A, exp, '1111', `Chi thanh toán theo ${no}: ${v.reason}`, `01 Giấy đề nghị thanh toán số ${no}`);
         genIds.push(g.id);
@@ -374,7 +483,12 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
     receiptsTotal,
     paymentsCount,
     paymentsTotal,
+    bankCount,
+    bankTotal,
+    bankInCount,
+    bankInTotal,
     net: receiptsTotal - paymentsTotal,
+    bankNet: bankInTotal - bankTotal,
     reversedIds: [],
     status: 'POSTED',
   };
@@ -439,7 +553,9 @@ export function internalForPlan(vouchers, month) {
   const pendingIn = pending.reduce((s, v) => s + cashEffect(v).in, 0);
   const postedOut = posted.reduce((s, v) => s + cashEffect(v).out, 0);
   const postedIn = posted.reduce((s, v) => s + cashEffect(v).in, 0);
-  return { pending, posted, pendingOut, pendingIn, postedOut, postedIn };
+  const pendingBank = pending.reduce((s, v) => s + bankEffect(v), 0);
+  const postedBank = posted.reduce((s, v) => s + bankEffect(v), 0);
+  return { pending, posted, pendingOut, pendingIn, postedOut, postedIn, pendingBank, postedBank };
 }
 
 /** Cấp số chứng từ khi duyệt (theo loại + tháng của ngày chứng từ) */
@@ -531,9 +647,13 @@ export function voucherStats(vouchers = [], month) {
     pendingAmount: pending.reduce((s, v) => s + voucherAmount(v), 0),
     pendingIn: pending.reduce((s, v) => s + cashEffect(v).in, 0),
     pendingOut: pending.reduce((s, v) => s + cashEffect(v).out, 0),
+    pendingBank: pending.reduce((s, v) => s + bankEffect(v), 0),
+    pendingBankIn: pending.reduce((s, v) => s + bankFlow(v).in, 0),
     approvedCount: approved.length,
     approvedIn: approved.reduce((s, v) => s + cashEffect(v).in, 0),
     approvedOut: approved.reduce((s, v) => s + cashEffect(v).out, 0),
+    approvedBank: approved.reduce((s, v) => s + bankEffect(v), 0),
+    approvedBankIn: approved.reduce((s, v) => s + bankFlow(v).in, 0),
     advanceOpen: adv.reduce((s, v) => s + advanceRemaining(v), 0),
     advanceCount: adv.length,
     advancePeople: new Set(adv.map((v) => v.person)).size,

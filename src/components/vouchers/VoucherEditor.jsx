@@ -45,8 +45,48 @@ function initialForm({ type, existing, prefill, me, company }) {
     bookNo: company.bookNo || '',
     dueDate: '',
     attachments: [],
+    payMethod: 'CASH',
+    payeeName: '',
+    payeeAccount: '',
+    payeeBank: '',
+    payeeBranch: '',
+    payeeTaxCode: '',
+    transferNote: '',
     ...(prefill || {}),
   };
+}
+
+/**
+ * Danh bạ người nhận để tự điền: nhà cung cấp (có tài khoản ngân hàng) và người đã có trong chứng từ trước.
+ * Trả về Map tên (thường) -> { name, place, account, bank, branch, holder, taxCode }
+ */
+function usePayeeBook(vouchers, suppliers) {
+  return useMemo(() => {
+    const m = new Map();
+    const put = (name, info) => {
+      const k = String(name || '').trim().toLowerCase();
+      if (!k) return;
+      const cur = m.get(k) || { name: String(name).trim() };
+      for (const [key, val] of Object.entries(info)) if (val && !cur[key]) cur[key] = val;
+      m.set(k, cur);
+    };
+    // chứng từ mới nhất trước
+    const list = [...(vouchers || [])].filter((v) => !v.auto).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    for (const v of list) {
+      put(v.person, {
+        place: v.position || v.address || '',
+        account: v.payeeAccount || '',
+        bank: v.payeeBank || '',
+        branch: v.payeeBranch || '',
+        holder: v.payeeName || '',
+        taxCode: v.payeeTaxCode || '',
+      });
+    }
+    for (const sp of suppliers || []) {
+      put(sp.name, { place: sp.address || '', account: sp.bankAccount || '', bank: sp.bankName || '', branch: sp.bankBranch || '', holder: sp.accountHolder || sp.name, taxCode: sp.taxCode || '' });
+    }
+    return m;
+  }, [vouchers, suppliers]);
 }
 
 const LABELS = {
@@ -81,6 +121,22 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
   const type = form.type;
   const L = LABELS[type];
   const style = TYPE_STYLE[type];
+  const book = usePayeeBook(data.vouchers, data.suppliers);
+  const bank = form.payMethod === 'BANK';
+
+  // Chọn / gõ đúng tên đã có: tự điền bộ phận / địa chỉ và tài khoản ngân hàng (chỉ điền ô còn trống)
+  const pickPerson = (name) => {
+    const hit = book.get(String(name || '').trim().toLowerCase());
+    const patch = { person: name };
+    if (hit) {
+      const placeKey = type === 'PT' || type === 'PC' ? 'address' : 'position';
+      if (!form[placeKey] && hit.place) patch[placeKey] = hit.place;
+      if (!form.payeeAccount && hit.account) {
+        Object.assign(patch, { payeeAccount: hit.account, payeeBank: form.payeeBank || hit.bank || '', payeeBranch: form.payeeBranch || hit.branch || '', payeeName: form.payeeName || hit.holder || '', payeeTaxCode: form.payeeTaxCode || hit.taxCode || '' });
+      }
+    }
+    set(patch);
+  };
 
   // Ảnh đã lưu của chứng từ đang sửa: tải để xem thu nhỏ
   useEffect(() => {
@@ -240,7 +296,14 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
             <Input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} />
           </Field>
           <Field label={L.person} required className="sm:col-span-4">
-            <Input value={form.person} onChange={(e) => set({ person: e.target.value })} placeholder="Nguyễn Văn A" autoComplete="name" />
+            <Input value={form.person} onChange={(e) => pickPerson(e.target.value)} placeholder="Nguyễn Văn A" autoComplete="off" list="voucher-people" />
+            <datalist id="voucher-people">
+              {[...book.values()].slice(0, 300).map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.account ? `${p.bank || ''} ${p.account}`.trim() : p.place || ''}
+                </option>
+              ))}
+            </datalist>
           </Field>
           <Field label={L.place} className="sm:col-span-6">
             <Input
@@ -266,12 +329,12 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
               </Field>
             )}
             {type === 'PT' && (
-              <Field label="Tài khoản ghi Có (Nợ 1111)" className="sm:col-span-3">
+              <Field label={`Tài khoản ghi Có (Nợ ${bank ? '1121' : '1111'})`} className="sm:col-span-3">
                 <AccountSelect set="ptCredit" value={form.credit} onChange={(v) => set({ credit: v })} />
               </Field>
             )}
             {type === 'PC' && (
-              <Field label="Tài khoản ghi Nợ (Có 1111)" className="sm:col-span-3">
+              <Field label={`Tài khoản ghi Nợ (Có ${bank ? '1121' : '1111'})`} className="sm:col-span-3">
                 <AccountSelect set="pcDebit" value={form.debit} onChange={(v) => set({ debit: v })} />
               </Field>
             )}
@@ -402,6 +465,56 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
             </div>
           </div>
         )}
+
+        {/* ---------- hình thức thanh toán ---------- */}
+        <div className="rounded-xl border border-slate-200 p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-ink-900">{type === 'PT' ? 'Hình thức nhận tiền' : 'Hình thức thanh toán'}</p>
+            <Segmented
+              value={form.payMethod || 'CASH'}
+              onChange={(m) => {
+                const patch = { payMethod: m };
+                if (m === 'BANK' && type !== 'PT') {
+                  const hit = book.get(String(form.person || '').trim().toLowerCase());
+                  if (hit && !form.payeeAccount && hit.account) Object.assign(patch, { payeeAccount: hit.account, payeeBank: hit.bank || '', payeeBranch: hit.branch || '', payeeName: hit.holder || '', payeeTaxCode: hit.taxCode || '' });
+                }
+                set(patch);
+              }}
+              options={[
+                { value: 'CASH', label: 'Tiền mặt (111)' },
+                { value: 'BANK', label: 'Chuyển khoản (112)' },
+              ]}
+            />
+          </div>
+          {bank && type === 'PT' && <p className="text-xs text-slate-500">Tiền vào tài khoản ngân hàng của công ty (Nợ 1121). Chọn tài khoản nhận khi kết chuyển.</p>}
+          {bank && type !== 'PT' && (
+            <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
+              <Field label="Tên chủ tài khoản nhận" className="sm:col-span-3">
+                <Input value={form.payeeName} onChange={(e) => set({ payeeName: e.target.value })} placeholder={form.person || 'Tên đơn vị / người nhận'} />
+              </Field>
+              <Field label="Số tài khoản" required className="sm:col-span-3">
+                <Input value={form.payeeAccount} onChange={(e) => set({ payeeAccount: e.target.value })} inputMode="numeric" placeholder="VD: 0071001234567" />
+              </Field>
+              <Field label="Ngân hàng" required className="sm:col-span-3">
+                <Input value={form.payeeBank} onChange={(e) => set({ payeeBank: e.target.value })} placeholder="VD: Vietcombank" list="voucher-banks" />
+              </Field>
+              <Field label="Chi nhánh" className="sm:col-span-3">
+                <Input value={form.payeeBranch} onChange={(e) => set({ payeeBranch: e.target.value })} placeholder="VD: CN Bình Dương" />
+              </Field>
+              <Field label="Mã số thuế (nếu là đơn vị)" className="sm:col-span-2">
+                <Input value={form.payeeTaxCode} onChange={(e) => set({ payeeTaxCode: e.target.value })} inputMode="numeric" />
+              </Field>
+              <Field label="Nội dung chuyển khoản" hint="Để trống: tự lấy số chứng từ + lý do, không dấu" className="sm:col-span-4">
+                <Input value={form.transferNote} onChange={(e) => set({ transferNote: e.target.value })} maxLength={140} />
+              </Field>
+              <datalist id="voucher-banks">
+                {['Vietcombank', 'VietinBank', 'BIDV', 'Agribank', 'Techcombank', 'MB Bank', 'ACB', 'VPBank', 'Sacombank', 'TPBank', 'SHB', 'HDBank', 'VIB', 'OCB', 'SeABank', 'MSB', 'Eximbank', 'LPBank', 'Nam A Bank', 'Bac A Bank'].map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
           <Field label="Kèm theo (số chứng từ gốc)" className={type === 'PT' || type === 'PC' ? 'sm:col-span-4' : 'sm:col-span-6'}>

@@ -892,7 +892,7 @@ export default function Planner() {
         label: 'Chi tiêu nội bộ đã duyệt',
         partner: `${internal.pending.length} chứng từ chờ kết xuất`,
         dueDate: null,
-        outstanding: internal.pendingOut,
+        outstanding: internal.pendingOut + internal.pendingBank,
         defaultPriority: 'P1',
         category: 'Chi nội bộ',
       });

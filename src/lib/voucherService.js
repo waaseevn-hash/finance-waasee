@@ -15,6 +15,7 @@ import {
   counterKey,
   countersNeeded,
   requestedAmount,
+  bankFlow,
   settlement,
   voucherAmount,
 } from './vouchers.js';
@@ -69,6 +70,16 @@ export function normalizeForm(f) {
     dueDate: f.type === 'TU' ? f.dueDate || '' : '',
     attachments: (f.attachments || []).slice(0, 12).map((a) => ({ id: a.id, name: a.name, type: a.type, size: a.size })),
   };
+  // Hình thức thanh toán: tiền mặt (111) hoặc chuyển khoản (112). Phiếu thu chuyển khoản không cần TK người nộp.
+  const bank = f.payMethod === 'BANK';
+  const payee = bank && f.type !== 'PT';
+  out.payMethod = bank ? 'BANK' : 'CASH';
+  out.payeeName = payee ? String(f.payeeName || f.person || '').trim().slice(0, 200) : '';
+  out.payeeAccount = payee ? String(f.payeeAccount || '').replace(/\s+/g, '').slice(0, 40) : '';
+  out.payeeBank = payee ? String(f.payeeBank || '').trim().slice(0, 200) : '';
+  out.payeeBranch = payee ? String(f.payeeBranch || '').trim().slice(0, 200) : '';
+  out.payeeTaxCode = payee ? String(f.payeeTaxCode || '').trim().slice(0, 20) : '';
+  out.transferNote = payee ? String(f.transferNote || '').trim().slice(0, 200) : '';
   out.amount = f.type === 'TT' ? items.reduce((s, it) => s + Math.round(it.qty * it.price), 0) : num(f.amount);
   out.total = f.type === 'TT' ? out.amount : 0;
   return out;
@@ -229,7 +240,11 @@ export async function deleteVoucher({ actor, v }) {
  *   2. Cấp số đợt KC-YYYYMMDD-NN, số phiếu thu/chi sinh tự động
  *   3. Ghi sổ quỹ (mã bút toán cố định), cập nhật quyết toán tạm ứng, khóa chứng từ (Đã kết chuyển)
  */
-export async function postVouchers({ actor, ids, postDate }) {
+/**
+ * Kết chuyển một đợt.
+ * payBank: tài khoản ngân hàng của công ty dùng cho các khoản chuyển khoản { id, name, accountNo, accountName }
+ */
+export async function postVouchers({ actor, ids, postDate, payBank = null }) {
   if (!ids.length) throw new Error('Chưa chọn chứng từ nào');
   if (ids.length > 80) throw new Error('Mỗi đợt kết chuyển tối đa 80 chứng từ. Chia thành nhiều đợt.');
   const batchId = newId(C.batches);
@@ -254,8 +269,23 @@ export async function postVouchers({ actor, ids, postDate }) {
 
     const plan = buildPostingPlan({ vouchers, advances, counters, postDate, newId: () => newId(C.vouchers), batchId, actorEmail: actor.email });
     const byId = Object.fromEntries(vouchers.map((v) => [v.id, v]));
+    // Khoản chuyển khoản: cập nhật số dư tiền gửi của tài khoản ngân hàng được chọn (đọc trước khi ghi)
+    let bankBefore = null;
+    let bankAfter = null;
+    if (plan.batch.bankTotal || plan.batch.bankInTotal) {
+      if (!payBank?.id) throw new Error('Đợt này có khoản chuyển khoản: chọn tài khoản ngân hàng của công ty để chi / nhận tiền.');
+      const bsnap = await tx.get(doc(db, C.banks, payBank.id));
+      if (!bsnap.exists()) throw new Error('Không tìm thấy tài khoản ngân hàng đã chọn');
+      bankBefore = { id: bsnap.id, ...bsnap.data() };
+      bankAfter = Math.round(Number(bankBefore.depositBalance) || 0) + plan.batch.bankInTotal - plan.batch.bankTotal;
+      if (bankAfter < 0)
+        throw new Error(`Số dư tiền gửi ${bankBefore.name} trên app (${fmtVND(bankBefore.depositBalance || 0)}) không đủ chi chuyển khoản ${fmtVND(plan.batch.bankTotal - plan.batch.bankInTotal)}. Cập nhật số dư theo sao kê hoặc chọn tài khoản khác.`);
+    }
 
-    audit.create(C.batches, { ...plan.batch, posterName: actor.name || actor.email }, { id: batchId });
+    const bankInfo = bankBefore
+      ? { payBank: { id: bankBefore.id, name: bankBefore.name || '', accountNo: bankBefore.accountNo || '', accountName: bankBefore.accountName || '' }, bankBalanceBefore: Math.round(Number(bankBefore.depositBalance) || 0), bankBalanceAfter: bankAfter }
+      : {};
+    audit.create(C.batches, { ...plan.batch, ...bankInfo, posterName: actor.name || actor.email }, { id: batchId });
     for (const g of plan.generated) {
       const src = byId[g.data.sourceId];
       audit.create(
@@ -283,12 +313,13 @@ export async function postVouchers({ actor, ids, postDate }) {
     for (const u of plan.voucherUpdates) audit.update(C.vouchers, u.id, u.patch, u.before);
     for (const c of plan.cashEntries) audit.create(C.cash, c.data, { id: c.id });
     for (const [id, a] of Object.entries(plan.advanceUpdates)) audit.update(C.vouchers, id, { settledAmount: a.settledAmount }, a.before);
+    if (bankBefore) audit.update(C.banks, bankBefore.id, { depositBalance: bankAfter }, bankBefore);
     for (const k of keys) {
       if (plan.counters[k] !== counters[k]) tx.set(doc(db, C.counters, k), { value: plan.counters[k], updatedBy: actor.email, updatedAt: serverTimestamp() });
     }
-    audit.summary = `Kết chuyển ${plan.batchCode}: ${vouchers.length} chứng từ — thu ${fmtVND(plan.batch.receiptsTotal)}, chi ${fmtVND(plan.batch.paymentsTotal)}`;
+    audit.summary = `Kết chuyển ${plan.batchCode}: ${vouchers.length} chứng từ — thu ${fmtVND(plan.batch.receiptsTotal)}, chi ${fmtVND(plan.batch.paymentsTotal)}${plan.batch.bankCount ? `, chuyển khoản ${fmtVND(plan.batch.bankTotal)}` : ''}`;
     audit.logData = { code: plan.batchCode, voucherNos: plan.batch.docNos, receiptsTotal: plan.batch.receiptsTotal, paymentsTotal: plan.batch.paymentsTotal, net: plan.batch.net };
-    return { batchId, batch: { id: batchId, ...plan.batch, posterName: actor.name || actor.email }, docs: plan.docs };
+    return { batchId, batch: { id: batchId, ...plan.batch, ...bankInfo, posterName: actor.name || actor.email }, docs: plan.docs };
   });
 }
 
@@ -308,12 +339,24 @@ export async function reverseVoucher({ actor, id, reason }) {
       if (as.exists()) advance = { id: as.id, ...as.data() };
     }
     const bs = v.postingBatchId ? await tx.get(doc(db, C.batches, v.postingBatchId)) : null;
+    // Chứng từ chuyển khoản: trả lại số dư tiền gửi của tài khoản đã dùng trong đợt
+    const flow = bankFlow(v);
+    const payBankId = bs?.exists() ? bs.data().payBank?.id : '';
+    let bankDoc = null;
+    if ((flow.in || flow.out) && payBankId) {
+      const bk = await tx.get(doc(db, C.banks, payBankId));
+      if (bk.exists()) bankDoc = { id: bk.id, ...bk.data() };
+    }
     const plan = buildReversalPlan({ v, gens, cash, advance, reverseDate: date, reason, batchId: v.postingBatchId });
 
     for (const r of plan.reversals) audit.create(C.cash, r.data, { id: r.id });
     for (const g of plan.cancelGenerated) audit.update(C.vouchers, g.id, { status: 'CANCELLED', cancelledOn: date, cancelReason: String(reason || '').slice(0, 500) }, g.before);
     if (plan.advanceUpdate) audit.update(C.vouchers, plan.advanceUpdate.id, { settledAmount: plan.advanceUpdate.settledAmount }, plan.advanceUpdate.before);
     audit.update(C.vouchers, v.id, plan.voucherPatch, v);
+    if (bankDoc) {
+      const restored = Math.max(0, Math.round(Number(bankDoc.depositBalance) || 0) + flow.out - flow.in);
+      audit.update(C.banks, bankDoc.id, { depositBalance: restored }, bankDoc);
+    }
     if (bs?.exists()) {
       const b = { id: bs.id, ...bs.data() };
       const reversedIds = [...new Set([...(b.reversedIds || []), v.id])];

@@ -807,7 +807,8 @@ export function RowDrawer({ row, onClose, data, note, onNote, onApprove, onRemov
         {row.kind === 'INTERNAL' && internal && (
           <Block title="Chứng từ nội bộ">
             <p className="mb-3 text-sm text-slate-600">
-              Chờ kết xuất: chi <b>{fmtVND(internal.pendingOut)}</b>
+              Chờ kết xuất: chi <b>{fmtVND(internal.pendingOut + internal.pendingBank)}</b>
+              {internal.pendingBank > 0 && <> (chuyển khoản {fmtVND(internal.pendingBank)})</>}
               {internal.pendingIn > 0 && <>, thu {fmtVND(internal.pendingIn)}</>}. Phần đã kết chuyển trong tháng ({fmtVND(internal.postedOut)}) đã trừ vào tồn két nên không cộng lại.
             </p>
             <div className="space-y-3">

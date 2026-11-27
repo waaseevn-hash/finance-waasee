@@ -62,7 +62,10 @@ Quy trình: **Nháp → Chờ duyệt → Đã duyệt (chờ kết xuất) → 
   4. mở bản in A4 hoặc 2 liên A5, tải được PDF và Excel bảng kê.
 - Bấm hai lần hoặc hai người cùng bấm không ghi trùng: chứng từ đã kết chuyển bị từ chối ngay trong giao dịch.
 - Sai sót sau kết chuyển: chỉ **Chủ DN** dùng **Hủy kết chuyển**. Hệ thống ghi bút toán đảo (không xóa), hủy phiếu tự động, trả chứng từ về “Đã duyệt”.
-- Thông tin in trên phiếu (tên công ty, địa chỉ, MST, Giám đốc, Kế toán trưởng, Thủ quỹ, quyển số) sửa ở **Quản trị → Thông tin doanh nghiệp**.
+- **Hình thức thanh toán:** mỗi chứng từ chọn **Tiền mặt (111)** hoặc **Chuyển khoản (112)**. Chuyển khoản thì nhập tài khoản người nhận (chủ TK, số TK, ngân hàng, chi nhánh, MST) — gõ tên đã có trong danh bạ nhà cung cấp hoặc chứng từ trước, app tự điền. Khi kết chuyển chọn **tài khoản ngân hàng của công ty** (khai số tài khoản ở Vay & Hạn mức NH → sửa ngân hàng); khoản chuyển khoản ghi Có/Nợ 1121, không vào sổ quỹ tiền mặt, và số dư tiền gửi trên app tự trừ / cộng. Hủy kết chuyển trả lại số dư.
+- Thu chi của đợt và các số liệu "khả dụng / cần chi" tính **cả tiền mặt và tiền gửi ngân hàng** (dòng tiền), có tách riêng từng loại.
+- **Bản in:** phông chữ nhúng sẵn (giống Times New Roman, đủ dấu tiếng Việt) nên PDF trên điện thoại và máy tính giống nhau. Đợt kết chuyển in: bảng kê đợt (111 và 112, số dư trước / sau), **bảng kê lệnh chuyển khoản** (người thụ hưởng, số TK, ngân hàng, số tiền, nội dung CK không dấu — đưa kế toán đi lệnh), rồi từng chứng từ. Nút "Lệnh chuyển khoản" để in riêng bảng này; file Excel có thêm sheet "Lệnh chuyển khoản".
+- Trong màn xem trước bản in, bấm **Thông tin in** để sửa tên đơn vị, địa chỉ, MST, Giám đốc, Kế toán trưởng, Thủ quỹ, người lập phiếu và người nộp / nhận / đề nghị của từng chứng từ trước khi in. Người lập phiếu tự điền theo tên thành viên. Bấm "Lưu thông tin đơn vị cho lần sau" để lần sau tự điền (cũng sửa được ở **Quản trị → Thông tin doanh nghiệp**).
 - Ảnh hóa đơn được nén và lưu cùng chứng từ (tối đa 12 ảnh, PDF dưới 700KB).
 
 ## 7. Tiền mặt và tiền gửi ngân hàng

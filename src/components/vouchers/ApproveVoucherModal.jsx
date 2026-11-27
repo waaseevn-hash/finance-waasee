@@ -7,7 +7,7 @@ import { cashBalance } from '../../lib/calc.js';
 import { fmtDate } from '../../lib/dates.js';
 import { fmtVND } from '../../lib/format.js';
 import { can } from '../../lib/roles.js';
-import { PARTIAL_TYPES, VTYPE, cashEffect, requestedAmount, settlement } from '../../lib/vouchers.js';
+import { PARTIAL_TYPES, VTYPE, flowEffect, isBank, requestedAmount, settlement } from '../../lib/vouchers.js';
 import { approveVouchers } from '../../lib/voucherService.js';
 import { Money, MoneyInput } from '../Money.jsx';
 import { useToast } from '../feedback.jsx';
@@ -38,22 +38,22 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
   }, [v?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const treasury = can(role, 'viewTreasury');
-  // Tiền mặt còn lại sau khi kết chuyển các khoản đã duyệt khác và khoản này
+  // Tiền (mặt + gửi ngân hàng) còn lại sau khi kết chuyển các khoản đã duyệt khác và khoản này
   const base = useMemo(() => {
     if (!treasury) return null;
-    let b = cashBalance(data.cash);
+    let b = cashBalance(data.cash) + (data.banks || []).reduce((t, x) => t + (Number(x.depositBalance) || 0), 0);
     for (const x of data.vouchers || []) {
       if (x.auto || x.status !== 'APPROVED' || x.id === v?.id) continue;
-      const e = cashEffect(x);
+      const e = flowEffect(x);
       b += e.in - e.out;
     }
     return b;
-  }, [treasury, data.cash, data.vouchers, v?.id]);
+  }, [treasury, data.cash, data.banks, data.vouchers, v?.id]);
 
   if (!v) return null;
   const approved = mode === 'FULL' ? req : Math.round(Number(amount) || 0);
   const preview = { ...v, status: 'APPROVED', approvedAmount: mode === 'FULL' ? 0 : approved };
-  const eff = cashEffect(preview);
+  const eff = flowEffect(preview);
   const st = v.type === 'TT' ? settlement(preview) : null;
   const after = base === null ? null : base + eff.in - eff.out;
 
@@ -94,6 +94,7 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
         <div className="rounded-xl bg-slate-50 px-4 py-3">
           <div className="flex items-center gap-2">
             <VTypeChip type={v.type} />
+            {isBank(v) && <span className="rounded bg-sapphire-50 px-1.5 py-px text-[10px] font-semibold text-sapphire-700 ring-1 ring-inset ring-sapphire-200">Chuyển khoản</span>}
             <span className="min-w-0 flex-1 truncate text-sm text-slate-600">{v.reason}</span>
           </div>
           <div className="mt-2 flex items-baseline justify-between gap-3">
@@ -170,7 +171,7 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
 
         {after !== null && (eff.out > 0 || eff.in > 0) && (
           <div className={cx('flex items-center justify-between rounded-xl px-4 py-2.5 text-sm', after < 0 ? 'bg-rose-50 text-rose-700' : 'bg-slate-50 text-slate-600')}>
-            <span>{after < 0 ? 'Thiếu tiền mặt sau khi kết chuyển' : 'Tiền mặt còn sau khi kết chuyển'}</span>
+            <span>{after < 0 ? 'Thiếu tiền (mặt + gửi) sau khi kết chuyển' : 'Tiền (mặt + gửi) còn sau khi kết chuyển'}</span>
             <Money value={Math.abs(after)} className="font-semibold" />
           </div>
         )}
