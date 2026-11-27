@@ -123,7 +123,7 @@ service cloud.firestore {
     }
     function validLoan(d) {
       return d.bankId is string
-        && shortText(d.contractNo, 100) && d.contractNo.size() > 0
+        && shortText(d.get('contractNo', ''), 100)
         && pos(d.amount)
         && isDate(d.disbursedDate)
         && isDate(d.maturityDate)

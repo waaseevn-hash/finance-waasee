@@ -196,8 +196,8 @@ export function buildRadar({ loans = [], banks = [], ar = [], ap = [], today = t
         kind: 'LOAN',
         title:
           d < 0
-            ? `KUNN ${l.contractNo || ''} đã quá hạn ${-d} ngày`
-            : `KUNN ${l.contractNo || ''} đáo hạn ${d === 0 ? 'hôm nay' : `sau ${d} ngày`}`,
+            ? `${loanLabel(l)} đã quá hạn ${-d} ngày`
+            : `${loanLabel(l)} đáo hạn ${d === 0 ? 'hôm nay' : `sau ${d} ngày`}`,
         sub: bankName(l.bankId),
         amount: num(l.amount),
         date: l.maturityDate,
@@ -332,7 +332,7 @@ export function planCandidates({ ap = [], loans = [], banks = [], month, extraAp
         key: `lm_${l.id}`,
         kind: 'LOAN',
         refId: l.id,
-        label: `Đáo hạn KUNN ${l.contractNo || ''}`.trim(),
+        label: `Đáo hạn ${loanLabel(l, { lower: true })}`,
         partner: bankName(l.bankId),
         dueDate: l.maturityDate,
         outstanding: num(l.amount),
@@ -605,6 +605,18 @@ export function computeVariance(snapshot, payments = []) {
   totals.outRate = totals.plannedOut ? (totals.actualOut / totals.plannedOut) * 100 : null;
 
   return { inRows, outRows, unplannedIn, unplannedOut, untracked, totals };
+}
+
+/**
+ * Tên gọi một khoản vay: "KUNN <số>" nếu có số khế ước (dữ liệu cũ),
+ * không thì "Khoản vay giải ngân dd/mm/yyyy".
+ */
+export function loanLabel(l, { lower = false } = {}) {
+  const no = String(l?.contractNo || '').trim();
+  if (no) return /kunn/i.test(no) ? no : `KUNN ${no}`;
+  const d = String(l?.disbursedDate || '');
+  const text = d ? `Khoản vay giải ngân ${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : 'Khoản vay';
+  return lower ? text.charAt(0).toLowerCase() + text.slice(1) : text;
 }
 
 /* ------------------------------------------------------------------ */

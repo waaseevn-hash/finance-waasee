@@ -792,7 +792,7 @@ export function RowDrawer({ row, onClose, data, note, onNote, onApprove, onRemov
         )}
         {row.kind === 'LOAN' && loan && (
           <Block title="Khoản vay">
-            <Info label="Khế ước">{loan.contractNo}</Info>
+            {loan.contractNo && <Info label="Khế ước">{loan.contractNo}</Info>}
             <Info label="Giải ngân">{fmtDate(loan.disbursedDate)}</Info>
             <Info label="Đáo hạn">{fmtDate(loan.maturityDate)}</Info>
             <Info label="Lãi suất">{loan.interestRate}%/năm</Info>

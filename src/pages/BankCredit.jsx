@@ -3,7 +3,7 @@ import { Banknote, Building2, CircleCheck, Landmark, Pencil, PiggyBank, Plus, Ro
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../lib/db.js';
-import { bankSummary, loanInterestForMonth } from '../lib/calc.js';
+import { bankSummary, loanInterestForMonth, loanLabel } from '../lib/calc.js';
 import { currentMonth, daysBetween, describeDays, fmtDate, todayISO } from '../lib/dates.js';
 import { fmtPct, fmtVND } from '../lib/format.js';
 import { Money, MoneyInput } from '../components/Money.jsx';
@@ -65,7 +65,7 @@ export default function BankCredit() {
 
   const removeBank = async (b) => {
     if (loans.some((l) => l.bankId === b.id)) {
-      toast.error('Ngân hàng còn khế ước. Hãy xóa hoặc chuyển các KUNN trước.');
+      toast.error('Ngân hàng còn khoản vay. Hãy xóa hoặc chuyển các khoản vay trước.');
       return;
     }
     const ok = await confirm({ title: `Xóa ngân hàng ${b.name}?`, message: 'Thông tin hạn mức sẽ bị xóa (vẫn lưu trong Nhật ký hệ thống).', confirmText: 'Xóa', tone: 'danger' });
@@ -82,17 +82,17 @@ export default function BankCredit() {
 
   const removeLoan = async (l) => {
     const ok = await confirm({
-      title: `Xóa KUNN ${l.contractNo}?`,
+      title: `Xóa ${loanLabel(l, { lower: true })}?`,
       message: 'Chỉ nên xóa khi nhập nhầm. Khoản vay đã trả xong hãy dùng "Tất toán" để giữ lịch sử.',
-      confirmText: 'Xóa khế ước',
+      confirmText: 'Xóa khoản vay',
       tone: 'danger',
     });
     if (!ok) return;
     try {
       const batch = new AuditedBatch(actor);
-      batch.remove(C.loans, l.id, pickRaw(l, LOAN_KEYS), `Xóa KUNN ${l.contractNo} (${bankName(l.bankId)}) — ${fmtVND(l.amount)}`);
+      batch.remove(C.loans, l.id, pickRaw(l, LOAN_KEYS), `Xóa ${loanLabel(l, { lower: true })} (${bankName(l.bankId)}) — ${fmtVND(l.amount)}`);
       await batch.commit();
-      toast.success('Đã xóa khế ước');
+      toast.success('Đã xóa khoản vay');
     } catch (ex) {
       toast.error(friendlyError(ex));
     }
@@ -101,7 +101,7 @@ export default function BankCredit() {
   const reopen = async (l) => {
     try {
       const batch = new AuditedBatch(actor);
-      batch.update(C.loans, l.id, { status: 'ACTIVE', settledDate: '' }, pickRaw(l, LOAN_KEYS), `Mở lại KUNN ${l.contractNo} (hủy tất toán)`);
+      batch.update(C.loans, l.id, { status: 'ACTIVE', settledDate: '' }, pickRaw(l, LOAN_KEYS), `Mở lại ${loanLabel(l, { lower: true })} (hủy tất toán)`);
       await batch.commit();
       toast.success('Đã chuyển về trạng thái Đang vay');
     } catch (ex) {
@@ -124,7 +124,7 @@ export default function BankCredit() {
               Thêm ngân hàng
             </Button>
             <Button variant="blue" icon={Plus} onClick={() => setLoanModal({})} disabled={!banks.length}>
-              Thêm KUNN
+              Thêm khoản vay
             </Button>
           </>
         }
@@ -146,7 +146,7 @@ export default function BankCredit() {
           <EmptyState
             icon={Landmark}
             title="Chưa có ngân hàng nào"
-            description="Thêm ngân hàng cùng tổng hạn mức được cấp, sau đó nhập từng khế ước nhận nợ (KUNN)."
+            description="Thêm ngân hàng cùng tổng hạn mức được cấp, sau đó nhập từng khoản vay đã giải ngân."
             action={<Button variant="blue" icon={Building2} onClick={() => setBankModal({})}>Thêm ngân hàng</Button>}
           />
         </Card>
@@ -162,7 +162,7 @@ export default function BankCredit() {
                   </div>
                 </div>
                 <div className="flex shrink-0">
-                  <Button size="iconSm" variant="ghost" icon={Plus} title="Thêm KUNN" onClick={() => setLoanModal({ bankId: b.id })} />
+                  <Button size="iconSm" variant="ghost" icon={Plus} title="Thêm khoản vay" onClick={() => setLoanModal({ bankId: b.id })} />
                   <Button size="iconSm" variant="ghost" icon={Pencil} title="Sửa" onClick={() => setBankModal({ initial: pickRaw(b, BANK_KEYS) })} />
                   <Button size="iconSm" variant="ghost" icon={Trash2} title="Xóa" onClick={() => removeBank(b)} />
                 </div>
@@ -197,7 +197,7 @@ export default function BankCredit() {
         <Card>
           <div className="flex flex-col gap-3 p-4 border-b border-slate-100 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-ink-900">Các khoản vay (khế ước nhận nợ)</h3>
+              <h3 className="text-sm font-semibold text-ink-900">Các khoản vay</h3>
               <p className="text-xs text-slate-500">
                 Lãi ước tính tháng này (theo ngày thực tế/365): <Money value={monthInterest} className="font-semibold text-orange-600" />
               </p>
@@ -224,14 +224,14 @@ export default function BankCredit() {
           </div>
 
           {loanRows.length === 0 ? (
-            <EmptyState title="Không có khế ước nào" description="Bấm “Thêm KUNN” để ghi nhận khoản giải ngân." />
+            <EmptyState title="Chưa có khoản vay nào" description="Bấm “Thêm khoản vay” để ghi nhận khoản giải ngân." />
           ) : (
             <>
               <TableWrap className="hidden md:block">
                 <table className="w-full">
                   <thead className="bg-slate-50/80">
                     <tr>
-                      <th className={th}>Số KUNN</th>
+                      <th className={th}>Khoản vay</th>
                       <th className={th}>Ngân hàng</th>
                       <th className={cx(th, 'text-right')}>Số tiền vay</th>
                       <th className={cx(th, 'text-right')}>Lãi suất</th>
@@ -246,7 +246,7 @@ export default function BankCredit() {
                     {loanRows.map((l) => (
                       <tr key={l.id} className={cx('hover:bg-slate-50/70', l.status === 'SETTLED' && 'text-slate-400')}>
                         <td className={td}>
-                          <p className="font-medium text-slate-800">{l.contractNo}</p>
+                          <p className="font-medium text-slate-800">{loanLabel(l)}</p>
                           {l.purpose && <p className="text-xs text-slate-500 max-w-[220px] truncate">{l.purpose}</p>}
                         </td>
                         <td className={cx(td, 'whitespace-nowrap')}>{bankName(l.bankId)}</td>
@@ -286,7 +286,7 @@ export default function BankCredit() {
                   <li key={l.id} className="px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-800">{l.contractNo}</p>
+                        <p className="text-sm font-semibold text-slate-800">{loanLabel(l)}</p>
                         <p className="text-xs text-slate-500">
                           {bankName(l.bankId)} · {fmtPct(l.interestRate, 2)}/năm
                         </p>

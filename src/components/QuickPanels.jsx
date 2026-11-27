@@ -25,7 +25,7 @@ import {
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../lib/db.js';
-import { apSummary, arSummary, bankSummary, cashLedger, cashMonthStats, loanInterestForMonth, remaining } from '../lib/calc.js';
+import { apSummary, arSummary, bankSummary, cashLedger, cashMonthStats, loanInterestForMonth, loanLabel, remaining } from '../lib/calc.js';
 import { currentMonth, daysBetween, describeDays, fmtDate, monthLabel, monthRange, todayISO } from '../lib/dates.js';
 import { fmtPct } from '../lib/format.js';
 import { can } from '../lib/roles.js';
@@ -228,7 +228,7 @@ function CreditPanel({ onClose }) {
 
   const remove = async (l) => {
     const ok = await confirm({
-      title: `Xóa khoản vay ${l.contractNo}?`,
+      title: `Xóa ${loanLabel(l, { lower: true })}?`,
       message: 'Chỉ xóa khi nhập nhầm. Khoản vay đã trả xong hãy dùng “Tất toán”.',
       confirmText: 'Xóa',
       tone: 'danger',
@@ -311,7 +311,7 @@ function CreditPanel({ onClose }) {
             <li key={l.id} className="rounded-xl bg-white border border-slate-200/70 px-3 py-2.5">
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-ink-900 truncate">{l.contractNo}</p>
+                  <p className="text-sm font-semibold text-ink-900 truncate">{loanLabel(l)}</p>
                   <p className="text-xs text-slate-500 truncate">
                     {bankName(l.bankId)} · {fmtPct(l.interestRate, 2)}/năm · lãi tháng ≈ <Money value={loanInterestForMonth(l, currentMonth())} />
                   </p>

@@ -267,3 +267,11 @@ test('tổng đã thu / đã trả và các lần thanh toán trong kỳ', async
   );
   assert.deepEqual(p, { total: 500, count: 2, byMethod: { CASH: 200, BANK: 300, OTHER: 0 } });
 });
+
+test('tên khoản vay khi không có số khế ước', async () => {
+  const { loanLabel } = await import('../src/lib/calc.js');
+  assert.equal(loanLabel({ contractNo: '0125/KUNN' }), '0125/KUNN');
+  assert.equal(loanLabel({ contractNo: 'BIDV-01' }), 'KUNN BIDV-01');
+  assert.equal(loanLabel({ contractNo: '', disbursedDate: '2026-11-12' }), 'Khoản vay giải ngân 12/11/2026');
+  assert.equal(loanLabel({ disbursedDate: '2026-11-12' }, { lower: true }), 'khoản vay giải ngân 12/11/2026');
+});

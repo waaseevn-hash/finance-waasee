@@ -3,7 +3,7 @@ import { Building2, CircleCheck, Landmark, Pencil, Plus, RotateCcw, Trash2 } fro
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useData } from '../../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../../lib/db.js';
-import { bankSummary, loanInterestForMonth } from '../../lib/calc.js';
+import { bankSummary, loanInterestForMonth, loanLabel } from '../../lib/calc.js';
 import { currentMonth, daysBetween, describeDays, fmtDate, todayISO } from '../../lib/dates.js';
 import { fmtPct, fmtVND } from '../../lib/format.js';
 import { Money, MoneyInput } from '../Money.jsx';
@@ -117,7 +117,7 @@ export function BankModal({ open, onClose, initial }) {
   );
 }
 
-/* ---------------------------- Khế ước ---------------------------- */
+/* ---------------------------- Khoản vay ---------------------------- */
 export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBankId }) {
   const { actor } = useAuth();
   const toast = useToast();
@@ -150,7 +150,6 @@ export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBank
     e.preventDefault();
     const er = {};
     if (!f.bankId) er.bankId = 'Chọn ngân hàng';
-    if (!f.contractNo.trim()) er.contractNo = 'Nhập số khế ước';
     if (!(Number(f.amount) > 0)) er.amount = 'Số tiền phải lớn hơn 0';
     if (!f.disbursedDate) er.disbursedDate = 'Chọn ngày giải ngân';
     if (!f.maturityDate) er.maturityDate = 'Chọn ngày đáo hạn';
@@ -161,7 +160,7 @@ export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBank
     if (Object.keys(er).length) return;
     const data = {
       bankId: f.bankId,
-      contractNo: f.contractNo.trim(),
+      contractNo: String(f.contractNo || '').trim(), // không còn nhập; giữ nguyên số cũ nếu có
       amount: Math.round(Number(f.amount)),
       disbursedDate: f.disbursedDate,
       interestRate: rate,
@@ -175,10 +174,10 @@ export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBank
     try {
       const b = new AuditedBatch(actor);
       const bankName = banks.find((x) => x.id === data.bankId)?.name || '';
-      if (initial) b.update(C.loans, initial.id, data, initial, `Sửa KUNN ${data.contractNo} (${bankName})`);
-      else b.create(C.loans, data, `Giải ngân KUNN ${data.contractNo} — ${bankName} — ${fmtVND(data.amount)}`);
+      if (initial) b.update(C.loans, initial.id, data, initial, `Sửa ${loanLabel(data)} (${bankName})`);
+      else b.create(C.loans, data, `Giải ngân ${loanLabel(data, { lower: true })} — ${bankName} — ${fmtVND(data.amount)}`);
       await b.commit();
-      toast.success('Đã lưu khế ước nhận nợ');
+      toast.success('Đã lưu khoản vay');
       onClose();
     } catch (ex) {
       toast.error(friendlyError(ex));
@@ -191,13 +190,13 @@ export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBank
     <Modal
       open={open}
       onClose={onClose}
-      title={initial ? 'Sửa khế ước nhận nợ (KUNN)' : 'Thêm khế ước nhận nợ / khoản giải ngân'}
+      title={initial ? 'Sửa khoản vay' : 'Thêm khoản vay / giải ngân'}
       size="lg"
       footer={
         <>
           <Button onClick={onClose}>Hủy</Button>
           <Button type="submit" form="loan-form" variant="blue" loading={busy}>
-            Lưu khế ước
+            Lưu khoản vay
           </Button>
         </>
       }
@@ -211,9 +210,6 @@ export function LoanModal({ open, onClose, initial, banks, bankRows, defaultBank
               </option>
             ))}
           </Select>
-        </Field>
-        <Field label="Số KUNN / số hợp đồng" required error={err.contractNo}>
-          <Input value={f.contractNo} onChange={set('contractNo')} placeholder="VD: 0125/2026/KUNN" />
         </Field>
         <Field
           label="Số tiền vay"
@@ -276,9 +272,9 @@ export function SettleModal({ open, onClose, loan, bankName }) {
     setBusy(true);
     try {
       const b = new AuditedBatch(actor);
-      b.update(C.loans, loan.id, { status: 'SETTLED', settledDate: date }, loan, `Tất toán KUNN ${loan.contractNo} (${bankName}) — ${fmtVND(loan.amount)}`);
+      b.update(C.loans, loan.id, { status: 'SETTLED', settledDate: date }, loan, `Tất toán ${loanLabel(loan, { lower: true })} (${bankName}) — ${fmtVND(loan.amount)}`);
       await b.commit();
-      toast.success(`Đã tất toán KUNN ${loan.contractNo}`);
+      toast.success(`Đã tất toán ${loanLabel(loan, { lower: true })}`);
       onClose();
     } catch (ex) {
       toast.error(friendlyError(ex));
@@ -290,7 +286,7 @@ export function SettleModal({ open, onClose, loan, bankName }) {
     <Modal
       open={open}
       onClose={onClose}
-      title="Tất toán khế ước"
+      title="Tất toán khoản vay"
       size="sm"
       footer={
         <>
@@ -304,7 +300,7 @@ export function SettleModal({ open, onClose, loan, bankName }) {
       <div className="space-y-4 text-sm">
         <div className="rounded-xl bg-slate-50 px-4 py-3">
           <p className="font-semibold text-slate-900">
-            KUNN {loan.contractNo} · {bankName}
+            {loanLabel(loan)} · {bankName}
           </p>
           <p className="mt-1 text-slate-600">
             Số tiền: <Money value={loan.amount} className="font-semibold" /> · Đáo hạn {fmtDate(loan.maturityDate)}
@@ -322,6 +318,6 @@ export function SettleModal({ open, onClose, loan, bankName }) {
 
 export async function deleteLoan(actor, l, bankName) {
   const b = new AuditedBatch(actor);
-  b.remove(C.loans, l.id, pickRaw(l, LOAN_KEYS), `Xóa KUNN ${l.contractNo} (${bankName}) — ${fmtVND(l.amount)}`);
+  b.remove(C.loans, l.id, pickRaw(l, LOAN_KEYS), `Xóa ${loanLabel(l, { lower: true })} (${bankName}) — ${fmtVND(l.amount)}`);
   await b.commit();
 }
