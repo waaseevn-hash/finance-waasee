@@ -7,12 +7,14 @@ import { db } from './firebase.js';
 import { AuditedBatch, C, newId, runAuditedTx } from './db.js';
 import { todayISO } from './dates.js';
 import {
+  PARTIAL_TYPES,
   VTYPE,
   buildApprovalNumbers,
   buildPostingPlan,
   buildReversalPlan,
   counterKey,
   countersNeeded,
+  requestedAmount,
   settlement,
   voucherAmount,
 } from './vouchers.js';
@@ -129,7 +131,7 @@ export async function saveVoucher({ actor, id, existing, form, mode }) {
     const counters = { [key]: cSnap.exists() ? cSnap.data().value || 0 : 0 };
     const vid = existing?.id || id;
     const { numbers, counters: next } = buildApprovalNumbers({ vouchers: [{ id: vid, ...content, no: cur?.no || '' }], counters });
-    const approval = { status: 'APPROVED', no: numbers[vid], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: todayISO(), rejectReason: '' };
+    const approval = { status: 'APPROVED', no: numbers[vid], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: todayISO(), rejectReason: '', approvedAmount: 0, approvalNote: '' };
     if (!cur) {
       audit.create(
         C.vouchers,
@@ -157,8 +159,11 @@ export async function saveVoucher({ actor, id, existing, form, mode }) {
   });
 }
 
-/** Duyệt một hoặc nhiều chứng từ đang chờ duyệt (cấp số) */
-export function approveVouchers({ actor, ids }) {
+/**
+ * Duyệt một hoặc nhiều chứng từ đang chờ duyệt (cấp số).
+ * partial: { [id]: { amount, note } } — duyệt một phần (số nhỏ hơn số đề nghị); không có thì duyệt toàn bộ.
+ */
+export function approveVouchers({ actor, ids, partial = {} }) {
   return runAuditedTx(actor, { summary: '' }, async (tx, audit) => {
     const snaps = await Promise.all(ids.map((id) => tx.get(doc(db, C.vouchers, id))));
     const list = snaps.map((s) => {
@@ -172,13 +177,28 @@ export function approveVouchers({ actor, ids }) {
     const counters = Object.fromEntries(keys.map((k, i) => [k, cs[i].exists() ? cs[i].data().value || 0 : 0]));
     const { numbers, counters: next } = buildApprovalNumbers({ vouchers: list, counters });
     const today = todayISO();
+    const partialNo = [];
     for (const v of list) {
-      audit.update(C.vouchers, v.id, { status: 'APPROVED', no: numbers[v.id], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: today, rejectReason: '' }, v);
+      const req = requestedAmount(v);
+      const p = partial[v.id];
+      const want = p ? Math.round(Number(p.amount) || 0) : 0;
+      if (p && (want <= 0 || want > req)) throw new Error(`Số duyệt của ${v.person} phải lớn hơn 0 và không vượt số đề nghị ${fmtVND(req)}`);
+      if (p && want < req && !PARTIAL_TYPES.includes(v.type)) throw new Error('Phiếu thu chỉ duyệt toàn bộ số tiền');
+      const approvedAmount = p && want < req ? want : 0;
+      if (approvedAmount) partialNo.push(`${numbers[v.id]} duyệt ${fmtVND(approvedAmount)}/${fmtVND(req)}`);
+      audit.update(
+        C.vouchers,
+        v.id,
+        { status: 'APPROVED', no: numbers[v.id], approvedBy: actor.email, approvedByName: actor.name || actor.email, approvedOn: today, rejectReason: '', approvedAmount, approvalNote: String(p?.note || '').trim().slice(0, 300) },
+        v,
+      );
     }
     for (const k of keys) {
       if (next[k] !== counters[k]) tx.set(doc(db, C.counters, k), { value: next[k], updatedBy: actor.email, updatedAt: serverTimestamp() });
     }
-    audit.summary = list.length === 1 ? `Duyệt ${describe({ ...list[0], no: numbers[list[0].id] })}` : `Duyệt ${list.length} chứng từ: ${list.map((v) => numbers[v.id]).join(', ')}`;
+    audit.summary =
+      (list.length === 1 ? `Duyệt ${describe({ ...list[0], no: numbers[list[0].id] })}` : `Duyệt ${list.length} chứng từ: ${list.map((v) => numbers[v.id]).join(', ')}`) +
+      (partialNo.length ? ` — duyệt một phần: ${partialNo.join('; ')}` : '');
     return numbers;
   });
 }
@@ -189,6 +209,8 @@ export async function rejectVoucher({ actor, v, reason, toPending = false }) {
   const patch = toPending
     ? { status: 'PENDING', approvedBy: '', approvedByName: '', approvedOn: '' }
     : { status: 'REJECTED', rejectReason: String(reason || '').trim().slice(0, 500), rejectedBy: actor.email, rejectedOn: todayISO(), approvedBy: '', approvedByName: '', approvedOn: '' };
+  // Bỏ số duyệt một phần cũ (khi duyệt lại sẽ chọn lại)
+  if (v.approvedAmount) Object.assign(patch, { approvedAmount: 0, approvalNote: '' });
   b.update(C.vouchers, v.id, patch, v, `${toPending ? 'Hủy duyệt' : `Từ chối (${patch.rejectReason})`} ${describe(v)}`);
   await b.commit();
 }

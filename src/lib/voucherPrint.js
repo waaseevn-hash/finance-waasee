@@ -6,7 +6,7 @@
  * Kết quả là một tài liệu HTML hoàn chỉnh (in bằng hộp thoại In của trình duyệt -> "Lưu thành PDF").
  */
 import { moneyToWords } from './vnwords.js';
-import { VTYPE, accountName, itemAmount, ledgerLines, settlement, voucherAmount } from './vouchers.js';
+import { VTYPE, accountName, isPartial, itemAmount, ledgerLines, requestedAmount, settlement, voucherAmount } from './vouchers.js';
 
 const esc = (s) =>
   String(s ?? '')
@@ -137,6 +137,7 @@ function payment(v, company, names) {
     ${line('Lý do chi:', dots(v.reason))}
     ${line('Số tiền:', `<b>${money(amount)} đồng</b>`)}
     ${line('(Viết bằng chữ):', `<i>${esc(moneyToWords(amount))}</i>`)}
+    ${isPartial(v) ? line('Ghi chú:', `Duyệt chi một phần — số đề nghị ${money(requestedAmount(v))} đồng${v.approvalNote ? `. ${esc(v.approvalNote)}` : ''}`) : ''}
     ${line('Kèm theo:', `${dots(v.attachedDocs, 10)} <span class="lb">Chứng từ gốc.</span>`)}
   </div>
   ${signatures(
@@ -158,7 +159,8 @@ function payment(v, company, names) {
 
 /* ---------------- 03-TT GIẤY ĐỀ NGHỊ TẠM ỨNG ---------------- */
 function advanceRequest(v, company) {
-  const amount = voucherAmount(v);
+  const amount = requestedAmount(v);
+  const approved = voucherAmount(v);
   return `
   ${header(company, v, 'GIẤY ĐỀ NGHỊ TẠM ỨNG')}
   <div class="body">
@@ -167,6 +169,7 @@ function advanceRequest(v, company) {
     ${line('Bộ phận (hoặc địa chỉ):', dots(v.position || v.address))}
     ${line('Đề nghị cho tạm ứng số tiền:', `<b>${money(amount)} đồng</b>`)}
     ${line('(Viết bằng chữ):', `<i>${esc(moneyToWords(amount))}</i>`)}
+    ${isPartial(v) ? line('Số tiền được duyệt tạm ứng:', `<b>${money(approved)} đồng</b> <i>(${esc(moneyToWords(approved))})</i>${v.approvalNote ? ` — ${esc(v.approvalNote)}` : ''}`) : ''}
     ${line('Lý do tạm ứng:', dots(v.reason))}
     ${line('Thời hạn thanh toán:', v.dueDate ? esc(shortDate(v.dueDate)) : dots(''))}
   </div>
@@ -197,11 +200,14 @@ function paymentRequest(v, company) {
       </tr>`,
     )
     .join('');
+  const partial = isPartial(v);
+  const listed = requestedAmount(v);
   let settle = '';
   if (s.B > 0) {
     settle = `
     <table class="settle">
-      <tr><td>Tổng số tiền chi theo bảng kê <b>(A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>
+      ${partial ? `<tr><td>Tổng số tiền chi theo bảng kê</td><td class="r">${money(listed)}</td></tr>` : ''}
+      <tr><td>${partial ? 'Số tiền được duyệt thanh toán' : 'Tổng số tiền chi theo bảng kê'} <b>(A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>
       <tr><td>Số tiền đã tạm ứng <b>(B)</b>${v.advanceNo ? ` — theo Giấy đề nghị tạm ứng số <b>${esc(v.advanceNo)}</b>` : ''}</td><td class="r"><b>${money(s.B)}</b></td></tr>
       ${
         s.refund > 0
@@ -231,10 +237,13 @@ function paymentRequest(v, company) {
   <table class="items">
     <thead><tr><th style="width:7%">TT</th><th>Tên chi phí</th><th style="width:9%">ĐVT</th><th style="width:9%">SL</th><th style="width:15%">Đơn giá</th><th style="width:17%">Thành tiền</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td colspan="5" class="r"><b>Tổng cộng (A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr></tfoot>
+    <tfoot><tr><td colspan="5" class="r"><b>Tổng cộng${partial ? '' : ' (A)'}</b></td><td class="r"><b>${money(listed)}</b></td></tr>${
+      partial ? `<tr><td colspan="5" class="r"><b>Số tiền được duyệt thanh toán (A)</b></td><td class="r"><b>${money(s.A)}</b></td></tr>` : ''
+    }</tfoot>
   </table>
   <div class="body">
-    ${line('Số tiền (viết bằng chữ):', `<i>${esc(moneyToWords(s.A))}</i>`)}
+    ${line(partial ? 'Số tiền được duyệt (viết bằng chữ):' : 'Số tiền (viết bằng chữ):', `<i>${esc(moneyToWords(s.A))}</i>`)}
+    ${partial && v.approvalNote ? line('Ghi chú duyệt:', esc(v.approvalNote)) : ''}
   </div>
   ${settle}
   ${diffWords ? `<div class="body">${line('', diffWords)}</div>` : ''}

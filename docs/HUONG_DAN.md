@@ -53,6 +53,8 @@ Quy trình: **Nháp → Chờ duyệt → Đã duyệt (chờ kết xuất) → 
 
 - Ai cũng lập được chứng từ. Kế toán (STAFF) chỉ thấy chứng từ do mình lập.
 - Chủ DN / Đồng quản trị duyệt, từ chối, kết chuyển. Khi duyệt, chứng từ được cấp số (PT-YYYYMM-XXX, PC-YYYYMM-XXX, TU-…, TT-…).
+- **Duyệt toàn bộ hoặc một phần:** mở chứng từ → **Duyệt** → chọn “Duyệt toàn bộ” hoặc “Duyệt một phần” rồi nhập số được duyệt (có nút 25% / 50% / 75%) và lý do. Kết chuyển, phiếu chi tự động, quyết toán tạm ứng và bản in đều theo số được duyệt; bản in ghi cả số đề nghị và số được duyệt. Phiếu thu chỉ duyệt toàn bộ. Duyệt hàng loạt ở thẻ Chờ duyệt là duyệt toàn bộ.
+- Đầu trang Chứng từ hiện **Số tiền mặt khả dụng** và **Số tiền cần phải chi** (chờ duyệt + chờ kết chuyển), kèm số tiền còn lại nếu kết chuyển các khoản đã duyệt và nếu duyệt thêm các khoản đang chờ — để biết duyệt, kết chuyển được tới đâu.
 - Thẻ **Kết xuất & kết chuyển**: tick chứng từ đã duyệt → **Kết xuất in phiếu & kết chuyển**. Một thao tác duy nhất sẽ:
   1. tạo đợt KC-YYYYMMDD-NN;
   2. tự lập phiếu chi tạm ứng, phiếu thu hoàn ứng (chi không hết) hoặc phiếu chi bổ sung (chi quá tạm ứng);
@@ -63,7 +65,18 @@ Quy trình: **Nháp → Chờ duyệt → Đã duyệt (chờ kết xuất) → 
 - Thông tin in trên phiếu (tên công ty, địa chỉ, MST, Giám đốc, Kế toán trưởng, Thủ quỹ, quyển số) sửa ở **Quản trị → Thông tin doanh nghiệp**.
 - Ảnh hóa đơn được nén và lưu cùng chứng từ (tối đa 12 ảnh, PDF dưới 700KB).
 
-## 7. Bảng điều phối tháng (bố cục 3 tầng)
+## 7. Tiền mặt và tiền gửi ngân hàng
+
+Menu **Tiền mặt và tiền gửi ngân hàng** (Chủ DN, Đồng quản trị).
+
+- **Người giữ tiền:** ngoài Két công ty, thêm 1–2 người đang cầm tiền mặt của công ty bằng ô “Thêm người giữ tiền” (sửa tên, bỏ người không còn giữ — chỉ bỏ được khi người đó đã bàn giao hết tiền).
+- Mỗi phiếu thu / chi chọn tiền vào / ra ở đâu (mặc định Két). Số tiền từng người giữ tự tính từ phiếu; cộng lại bằng tồn quỹ tiền mặt.
+- **Bàn giao tiền:** chuyển tiền giữa két và người giữ. Tổng tiền mặt không đổi, không tính vào thu / chi trong tháng. Sửa hoặc xóa một lần bàn giao thì sửa / xóa cả hai bên.
+- Bấm thẻ một người giữ để xem sổ quỹ riêng của người đó; **Kiểm kê quỹ** chọn kiểm kê két hay từng người.
+- **Các khoản cần duyệt chi:** chứng từ nội bộ chờ duyệt (nút Duyệt — toàn bộ hoặc một phần; dưới mỗi khoản có số tiền mặt còn lại nếu duyệt lần lượt) và công nợ phải trả chưa duyệt chi (nút Duyệt chi; lọc “Đến hạn tháng này” / “Tất cả”).
+- **Tiền gửi ngân hàng:** số dư từng tài khoản, bấm “Cập nhật” để sửa theo sao kê.
+
+## 8. Bảng điều phối tháng (bố cục 3 tầng)
 
 - **Thanh trên cùng (luôn hiện khi cuộn):** Nguồn tiền khả dụng · Tổng dự chi · Số dư sau chi (đỏ kèm số cần rút hạn mức nếu thiếu) · Chốt kế hoạch · Xuất PDF / Excel.
 - **Nguồn tiền vào (thu gọn được):** tiền mặt trong két (quỹ dự phòng, cộng tiền gửi NH); phải thu tháng này (mở danh sách để tick); hạn mức vay còn trống (công tắc “Tính gộp vào nguồn khả dụng”).

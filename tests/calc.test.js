@@ -275,3 +275,31 @@ test('tên khoản vay khi không có số khế ước', async () => {
   assert.equal(loanLabel({ contractNo: '', disbursedDate: '2026-11-12' }), 'Khoản vay giải ngân 12/11/2026');
   assert.equal(loanLabel({ disbursedDate: '2026-11-12' }, { lower: true }), 'khoản vay giải ngân 12/11/2026');
 });
+
+test('tiền mặt theo người giữ và bàn giao', async () => {
+  const { holderBalances, cashLedgerFor, cashMonthStats, cashBalance } = await import('../src/lib/calc.js');
+  const cash = [
+    { id: 'a', date: '2026-11-01', type: 'IN', amount: 10_000_000, description: 'Tồn đầu' },
+    { id: 'b', date: '2026-11-05', type: 'OUT', amount: 4_000_000, holderId: 'H1', transferId: 'T1', description: 'Bàn giao' },
+    { id: 'c', date: '2026-11-05', type: 'IN', amount: 4_000_000, holderId: 'H1', transferId: 'T1', description: 'Nhận' },
+    { id: 'd', date: '2026-11-06', type: 'OUT', amount: 1_000_000, holderId: 'H1', description: 'Chi mua vật tư' },
+  ];
+  // sửa lại: chân chi của bàn giao thuộc két
+  cash[1].holderId = '';
+  const bal = holderBalances(cash);
+  assert.equal(bal.MAIN, 6_000_000);
+  assert.equal(bal.H1, 3_000_000);
+  assert.equal(cashBalance(cash), 9_000_000);
+  const st = cashMonthStats(cash, '2026-11');
+  assert.equal(st.inSum, 10_000_000);
+  assert.equal(st.outSum, 1_000_000);
+  const all = cashLedgerFor(cash);
+  assert.equal(all.length, 3);
+  const move = all.find((r) => r.move);
+  assert.equal(move.fromHolder, 'MAIN');
+  assert.equal(move.toHolder, 'H1');
+  assert.equal(move.balance, 10_000_000);
+  assert.equal(all[all.length - 1].balance, 9_000_000);
+  const h1 = cashLedgerFor(cash, 'H1');
+  assert.deepEqual(h1.map((r) => r.balance), [4_000_000, 3_000_000]);
+});

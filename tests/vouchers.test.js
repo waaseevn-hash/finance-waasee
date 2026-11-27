@@ -157,3 +157,41 @@ test('số liệu tháng của chứng từ: thu, chi, chi phí, chờ duyệt',
   assert.equal(s.approvedIn, 4e5);
   assert.equal(s.advanceOpen, 3e6);
 });
+
+test('số tiền chứng từ chờ duyệt cần chi', async () => {
+  const { voucherStats } = await import('../src/lib/vouchers.js');
+  const st = voucherStats(
+    [
+      { id: '1', type: 'PC', status: 'PENDING', amount: 2_000_000, date: '2026-11-02' },
+      { id: '2', type: 'PT', status: 'PENDING', amount: 500_000, date: '2026-11-02' },
+      { id: '3', type: 'TU', status: 'APPROVED', amount: 1_000_000, date: '2026-11-03' },
+    ],
+    '2026-11',
+  );
+  assert.equal(st.pendingOut, 2_000_000);
+  assert.equal(st.pendingIn, 500_000);
+  assert.equal(st.approvedOut, 1_000_000);
+});
+
+test('duyệt một phần: số được duyệt dùng khi kết chuyển', async () => {
+  const { voucherAmount, requestedAmount, isPartial } = await import('../src/lib/vouchers.js');
+  const pc = { ...base, id: 'pcx', type: 'PC', amount: 4_000_000, debit: '642', approvedAmount: 2_500_000 };
+  assert.equal(isPartial(pc), true);
+  assert.equal(voucherAmount(pc), 2_500_000);
+  assert.equal(requestedAmount(pc), 4_000_000);
+  // Chưa duyệt (Chờ duyệt) thì vẫn là số đề nghị
+  assert.equal(voucherAmount({ ...pc, status: 'PENDING' }), 4_000_000);
+  // Số duyệt bằng / lớn hơn số đề nghị = duyệt toàn bộ; phiếu thu luôn đủ
+  assert.equal(isPartial({ ...pc, approvedAmount: 4_000_000 }), false);
+  assert.equal(isPartial({ ...base, type: 'PT', amount: 1e6, approvedAmount: 5e5 }), false);
+  // GĐNTT: bảng kê 1,5tr, đã ứng 1tr, duyệt 800k -> nộp lại 200k
+  const t = tt('ttx', [{ name: 'Vé xe', qty: 1, price: 1_500_000 }], 1_000_000, { approvedAmount: 800_000 });
+  assert.deepEqual(settlement(t), { A: 800_000, B: 1_000_000, cleared: 800_000, refund: 200_000, extra: 0 });
+  const tu = { ...base, id: 'tux', type: 'TU', amount: 5e6, approvedAmount: 3e6 };
+  const p = buildPostingPlan({ vouchers: [pc, tu], advances: {}, counters: {}, postDate: '2026-11-20', newId, batchId: 'B9', actorEmail: 'o@x' });
+  const outs = p.cashEntries.map((c) => c.data?.amount ?? c.amount).sort((a, b) => a - b);
+  assert.deepEqual(outs, [2_500_000, 3_000_000]);
+  assert.equal(p.batch.paymentsTotal, 5_500_000);
+  // Tạm ứng còn phải quyết toán theo số được duyệt
+  assert.equal(advanceRemaining({ ...tu, status: 'POSTED', settledAmount: 1e6 }), 2e6);
+});

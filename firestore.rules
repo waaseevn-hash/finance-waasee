@@ -189,7 +189,9 @@ service cloud.firestore {
         && nonNeg(d.amount)
         && shortText(d.get('postingBatchId', ''), 100)
         && (d.type != 'TT' || (d.items is list && d.items.size() > 0 && d.items.size() <= 100 && nonNeg(d.advanceAmount)))
-        && d.get('attachments', []) is list && d.get('attachments', []).size() <= 12;
+        && d.get('attachments', []) is list && d.get('attachments', []).size() <= 12
+        && nonNeg(d.get('approvedAmount', 0))
+        && shortText(d.get('approvalNote', ''), 500);
     }
     function changed() {
       return request.resource.data.diff(resource.data).affectedKeys();
@@ -365,7 +367,8 @@ service cloud.firestore {
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'CREATE');
 
-      // Soạn / sửa / gửi duyệt (người lập hoặc quản lý) — quản lý có thể duyệt ngay khi lưu
+      // Soạn / sửa / gửi duyệt (người lập hoặc quản lý) — quản lý có thể duyệt ngay khi lưu.
+      // Duyệt một phần: approvedAmount (0 = duyệt toàn bộ) không vượt số đề nghị; người lập không tự ghi được.
       allow update: if isStaffOrAbove()
         && (resource.data.requestedBy == myEmail() || isManager())
         && resource.data.auto == false
@@ -374,11 +377,12 @@ service cloud.firestore {
         && (
           (request.resource.data.status in ['DRAFT', 'PENDING']
             && request.resource.data.no == resource.data.no
-            && !changed().hasAny(['approvedBy', 'approvedOn']))
+            && !changed().hasAny(['approvedBy', 'approvedOn', 'approvedAmount', 'approvalNote']))
           || (isManager() && request.resource.data.status == 'APPROVED'
             && request.resource.data.approvedBy == myEmail()
             && request.resource.data.no.size() > 0
-            && (resource.data.no == '' || request.resource.data.no == resource.data.no))
+            && (resource.data.no == '' || request.resource.data.no == resource.data.no)
+            && request.resource.data.get('approvedAmount', 0) <= request.resource.data.amount)
         )
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'UPDATE');
@@ -390,7 +394,7 @@ service cloud.firestore {
         && request.resource.data.status in ['REJECTED', 'PENDING']
         && (request.resource.data.status == 'PENDING' || request.resource.data.rejectReason.size() > 0)
         && request.resource.data.no == resource.data.no
-        && changed().hasOnly(['status', 'rejectReason', 'rejectedBy', 'rejectedOn', 'approvedBy', 'approvedByName', 'approvedOn', 'updatedBy', 'updatedAt', '_auditId'])
+        && changed().hasOnly(['status', 'rejectReason', 'rejectedBy', 'rejectedOn', 'approvedBy', 'approvedByName', 'approvedOn', 'approvedAmount', 'approvalNote', 'updatedBy', 'updatedAt', '_auditId'])
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'UPDATE');
 

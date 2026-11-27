@@ -5,6 +5,7 @@
  */
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import {
+  ArrowRightLeft,
   Building2,
   CircleArrowDown,
   CircleArrowUp,
@@ -25,7 +26,7 @@ import {
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../lib/db.js';
-import { apSummary, arSummary, bankSummary, cashLedger, cashMonthStats, loanInterestForMonth, loanLabel, remaining } from '../lib/calc.js';
+import { apSummary, arSummary, bankSummary, cashBalance, cashLedgerFor, cashMonthStats, holderOf, loanInterestForMonth, loanLabel, remaining } from '../lib/calc.js';
 import { currentMonth, daysBetween, describeDays, fmtDate, monthLabel, monthRange, todayISO } from '../lib/dates.js';
 import { fmtPct } from '../lib/format.js';
 import { can } from '../lib/roles.js';
@@ -33,6 +34,7 @@ import { Money, MoneyInput } from './Money.jsx';
 import { useConfirm, useToast } from './feedback.jsx';
 import { Badge, Button, Drawer, EmptyState, MonthPicker, ProgressBar, Segmented, cx } from './ui.jsx';
 import { CountModal, EntryModal, TYPE_LABEL, deleteCashEntry } from './forms/cashForms.jsx';
+import { useCashHolders } from '../lib/holders.js';
 import { BANK_KEYS, BankModal, LOAN_KEYS, LoanModal, SettleModal, daysTone, deleteLoan, pickRaw } from './forms/bankForms.jsx';
 import { DebtModal, HistoryModal, KIND, PaymentModal, deleteDebt, raw } from './forms/debtForms.jsx';
 import { ApprovalBadge, useApprovalFlow } from './forms/approvalForms.jsx';
@@ -104,12 +106,13 @@ function CashPanel({ opts, onClose }) {
   const [type, setType] = useState(opts.type || 'ALL');
   const [modal, setModal] = useState(null);
   const [countOpen, setCountOpen] = useState(false);
+  const holders = useCashHolders();
 
-  const ledger = useMemo(() => cashLedger(cash), [cash]);
-  const balance = ledger.length ? ledger[ledger.length - 1].balance : 0;
+  const ledger = useMemo(() => cashLedgerFor(cash), [cash]);
+  const balance = useMemo(() => cashBalance(cash), [cash]);
   const stats = useMemo(() => cashMonthStats(cash, month), [cash, month]);
   const { start, end } = monthRange(month);
-  const rows = ledger.filter((e) => e.date >= start && e.date <= end && (type === 'ALL' || e.type === type)).reverse();
+  const rows = ledger.filter((e) => e.date >= start && e.date <= end && (type === 'ALL' || (!e.move && e.type === type))).reverse();
 
   const remove = async (e) => {
     const ok = await confirm({
@@ -174,24 +177,31 @@ function CashPanel({ opts, onClose }) {
         <ul className="space-y-2">
           {rows.map((e) => (
             <li key={e.id} className="flex items-center gap-3 rounded-xl bg-white px-3 py-2.5 border border-slate-200/70">
-              <span className={cx('grid h-9 w-9 shrink-0 place-items-center rounded-full', e.type === 'IN' ? 'bg-jade-50 text-jade-600' : 'bg-vermilion-50 text-vermilion-600')}>
-                {e.type === 'IN' ? <CircleArrowDown className="h-4 w-4" /> : <CircleArrowUp className="h-4 w-4" />}
+              <span className={cx('grid h-9 w-9 shrink-0 place-items-center rounded-full', e.move ? 'bg-slate-100 text-slate-500' : e.type === 'IN' ? 'bg-jade-50 text-jade-600' : 'bg-vermilion-50 text-vermilion-600')}>
+                {e.move ? <ArrowRightLeft className="h-4 w-4" /> : e.type === 'IN' ? <CircleArrowDown className="h-4 w-4" /> : <CircleArrowUp className="h-4 w-4" />}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-ink-900 truncate">{e.description}</p>
+                <p className="text-sm font-medium text-ink-900 truncate">{e.move ? `Bàn giao: ${holders.name(e.fromHolder)} → ${holders.name(e.toHolder)}` : e.description}</p>
                 <p className="text-xs text-slate-500 truncate">
                   {fmtDate(e.date)}
-                  {e.counterparty && ` · ${e.counterparty}`}
+                  {!e.move && holders.active.length > 1 && ` · ${holders.name(holderOf(e))}`}
+                  {!e.move && e.counterparty && ` · ${e.counterparty}`}
                 </p>
               </div>
               <div className="text-right">
-                <Money value={e.type === 'IN' ? e.amount : -e.amount} sign className={cx('block text-sm font-bold', e.type === 'IN' ? 'text-jade-600' : 'text-vermilion-600')} />
+                {e.move ? (
+                  <Money value={e.amount} className="block text-sm font-medium text-slate-500" />
+                ) : (
+                  <Money value={e.type === 'IN' ? e.amount : -e.amount} sign className={cx('block text-sm font-bold', e.type === 'IN' ? 'text-jade-600' : 'text-vermilion-600')} />
+                )}
                 <span className="text-[11px] text-slate-400">
                   Tồn <Money value={e.balance} />
                 </span>
               </div>
               {e.voucherId ? (
                 <RowAction icon={Lock} title={`Bút toán từ chứng từ ${e.voucherNo || ''} — đã khóa`} onClick={() => setModal({ initial: e })} />
+              ) : e.move ? (
+                <RowAction icon={Pencil} title="Sửa / xóa bàn giao" onClick={() => setModal({ initial: e })} />
               ) : (
                 <>
                   <RowAction icon={Pencil} title="Sửa" onClick={() => setModal({ initial: e })} />
@@ -202,8 +212,8 @@ function CashPanel({ opts, onClose }) {
           ))}
         </ul>
       )}
-      <EntryModal open={!!modal} onClose={() => setModal(null)} initial={modal?.initial} defaultType={modal?.type} balance={balance} />
-      <CountModal open={countOpen} onClose={() => setCountOpen(false)} balance={balance} />
+      <EntryModal open={!!modal} onClose={() => setModal(null)} initial={modal?.initial} defaultType={modal?.type} />
+      <CountModal open={countOpen} onClose={() => setCountOpen(false)} />
     </Drawer>
   );
 }

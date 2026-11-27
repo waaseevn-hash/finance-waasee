@@ -150,22 +150,6 @@ export default function Dashboard() {
         {treasury && (
           <StatTile
             variant="solid"
-            tone="jade"
-            icon={Vault}
-            label="Tiền mặt trong két"
-            value={<Money value={m.cash} />}
-            sub={
-              <>
-                Tháng này thu <Money value={m.month.inSum} className="font-semibold" /> · chi <Money value={m.month.outSum} className="font-semibold" />
-              </>
-            }
-            action="Thu / chi tiền"
-            onClick={() => quick.open('cash')}
-          />
-        )}
-        {treasury && (
-          <StatTile
-            variant="solid"
             tone="sapphire"
             icon={Landmark}
             label="Dư nợ vay ngân hàng"
@@ -180,6 +164,22 @@ export default function Dashboard() {
             }
             action="Vay / tất toán"
             onClick={() => quick.open('credit')}
+          />
+        )}
+        {treasury && (
+          <StatTile
+            variant="solid"
+            tone="jade"
+            icon={Vault}
+            label="Tiền mặt trong két"
+            value={<Money value={m.cash} />}
+            sub={
+              <>
+                Tháng này thu <Money value={m.month.inSum} className="font-semibold" /> · chi <Money value={m.month.outSum} className="font-semibold" />
+              </>
+            }
+            action="Thu / chi tiền"
+            onClick={() => quick.open('cash')}
           />
         )}
         <StatTile

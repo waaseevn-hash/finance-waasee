@@ -51,6 +51,7 @@ export function cashLedger(entries = []) {
   });
 }
 
+/** Thu / chi trong tháng. Bàn giao tiền giữa người giữ quỹ không tính là thu hay chi. */
 export function cashMonthStats(entries = [], ym) {
   const { start, end } = monthRange(ym);
   let opening = 0;
@@ -58,12 +59,59 @@ export function cashMonthStats(entries = [], ym) {
   let outSum = 0;
   for (const e of entries) {
     if (e.date < start) opening += signed(e);
-    else if (e.date <= end) {
+    else if (e.date <= end && !isTransfer(e)) {
       if (e.type === 'IN') inSum += num(e.amount);
       else outSum += num(e.amount);
     }
   }
   return { opening, inSum, outSum, closing: opening + inSum - outSum };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Người giữ tiền mặt (quỹ phụ)                                        */
+/*  Mỗi phiếu thuộc một người giữ (holderId, trống = Két công ty).      */
+/*  Bàn giao = 2 phiếu cùng transferId: chi ở người giao, thu ở người    */
+/*  nhận — tổng tiền mặt không đổi.                                      */
+/* ------------------------------------------------------------------ */
+
+export const MAIN_HOLDER = 'MAIN';
+export const isTransfer = (e) => !!e?.transferId;
+export const holderOf = (e) => e?.holderId || MAIN_HOLDER;
+
+/** Số dư từng người giữ: { [holderId]: số dư } */
+export function holderBalances(entries = []) {
+  const out = {};
+  for (const e of entries) {
+    const h = holderOf(e);
+    out[h] = (out[h] || 0) + signed(e);
+  }
+  return out;
+}
+
+/**
+ * Sổ quỹ để hiển thị.
+ *  - holderId: chỉ phiếu của người giữ đó, tồn quỹ là của người đó; bàn giao hiện như thu / chi.
+ *  - không truyền: toàn bộ tiền mặt; mỗi lần bàn giao gộp thành 1 dòng (move: true, không thu không chi).
+ */
+export function cashLedgerFor(entries = [], holderId = null) {
+  if (holderId) return cashLedger(entries.filter((e) => holderOf(e) === holderId));
+  const sorted = cashLedger(entries);
+  let run = 0;
+  const rows = [];
+  const seen = new Set();
+  for (const e of sorted) {
+    if (isTransfer(e)) {
+      if (seen.has(e.transferId)) continue;
+      seen.add(e.transferId);
+      const out = e.type === 'OUT' ? e : sorted.find((x) => x.transferId === e.transferId && x.type === 'OUT') || e;
+      const inn = sorted.find((x) => x.transferId === e.transferId && x.type === 'IN');
+      rows.push({ ...out, move: true, fromHolder: holderOf(out), toHolder: inn ? holderOf(inn) : out.transferPeer || '', balance: run });
+      continue;
+    }
+    run += signed(e);
+    rows.push({ ...e, balance: run });
+  }
+  return rows;
 }
 
 /* ------------------------------------------------------------------ */

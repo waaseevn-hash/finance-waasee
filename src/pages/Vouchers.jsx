@@ -21,16 +21,17 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { can } from '../lib/roles.js';
 import { friendlyError } from '../lib/db.js';
-import { currentMonth, daysBetween, fmtDate, monthLabel, todayISO } from '../lib/dates.js';
+import { currentMonth, daysBetween, fmtDate, todayISO } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
-import { cashBalance } from '../lib/calc.js';
+import { cashBalance, holderBalances } from '../lib/calc.js';
+import { useCashHolders } from '../lib/holders.js';
 import { useCompany } from '../lib/brand.js';
-import { VSTATUS, VTYPE, advanceRemaining, cashEffect, ledgerLines, openAdvances, voucherAmount, voucherStats } from '../lib/vouchers.js';
+import { VSTATUS, VTYPE, advanceRemaining, cashEffect, isPartial, ledgerLines, openAdvances, requestedAmount, voucherAmount, voucherStats } from '../lib/vouchers.js';
 import { approveVouchers, postVouchers } from '../lib/voucherService.js';
 import { downloadBatchXlsx } from '../lib/voucherExcel.js';
 import { useToast } from '../components/feedback.jsx';
 import { Money } from '../components/Money.jsx';
-import { Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, MonthPicker, PageHeader, Segmented, Select, Tabs, cx } from '../components/ui.jsx';
+import { Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select, Tabs, cx } from '../components/ui.jsx';
 import { Figure, MiniStat } from '../components/Figure.jsx';
 import { Who } from '../components/Who.jsx';
 import { TYPE_ICON, TYPE_STYLE, VStatusBadge, VTypeChip } from '../components/vouchers/common.jsx';
@@ -103,6 +104,11 @@ function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
         </span>
         <span className="shrink-0 text-right">
           <Money value={amt} className={cx('block text-sm font-semibold', sign === 'in' ? 'text-jade-700' : 'text-ink-900')} />
+          {isPartial(v) && (
+            <span className="block text-[11px] text-slate-400" title="Duyệt một phần">
+              duyệt 1 phần / <Money value={requestedAmount(v)} />
+            </span>
+          )}
           <span className="mt-1 inline-block">
             <VStatusBadge status={v.status} />
           </span>
@@ -113,58 +119,91 @@ function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
 }
 
 /** Số liệu tháng: tổng thu, tổng chi, chênh lệch + các việc đang chờ */
-function VoucherSummary({ stats, month, setMonth, manager, ready, onGo }) {
+/** Thanh so sánh: tiền đang có và số cần chi (đã duyệt + chờ duyệt) trên cùng một thang */
+function CoverBars({ cash, approvedOut, pendingOut }) {
+  const scale = Math.max(cash, approvedOut + pendingOut, 1);
+  const pct = (v) => `${Math.max(0, (v / scale) * 100)}%`;
+  return (
+    <div className="space-y-1.5" aria-hidden="true">
+      <div className="flex items-center gap-2">
+        <span className="w-14 shrink-0 text-[11px] text-slate-500">Đang có</span>
+        <span className="flex h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+          <span className="h-full rounded-full bg-jade-500" style={{ width: pct(cash) }} />
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="w-14 shrink-0 text-[11px] text-slate-500">Cần chi</span>
+        <span className="flex h-2.5 flex-1 gap-[2px] overflow-hidden rounded-full bg-slate-100">
+          {approvedOut > 0 && <span className="h-full rounded-full bg-sapphire-500" style={{ width: pct(approvedOut) }} title="Đã duyệt, chờ kết chuyển" />}
+          {pendingOut > 0 && <span className="h-full rounded-full bg-amber-400" style={{ width: pct(pendingOut) }} title="Chờ duyệt" />}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function VoucherSummary({ stats, cash, treasury, manager, ready, onGo, holdersLine }) {
   const s = stats;
-  const parts = [
-    ['Tạm ứng', s.outByType.TU],
-    ['Thanh toán', s.outByType.TT],
-    ['Phiếu chi', s.outByType.PC],
-  ].filter(([, v]) => v > 0);
+  const need = s.pendingOut + s.approvedOut;
+  // Ưu tiên: kết chuyển các khoản đã duyệt trước, sau đó mới tới các khoản đang chờ duyệt
+  const afterApproved = cash - s.approvedOut + s.approvedIn;
+  const afterAll = afterApproved - s.pendingOut + s.pendingIn;
+  const Left = ({ v }) => (
+    <b className={v < 0 ? 'text-rose-600' : 'text-ink-900'}>
+      {v < 0 ? 'thiếu ' : 'còn '}
+      <Money value={Math.abs(v)} />
+    </b>
+  );
   return (
     <Card className="mb-5">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 pt-4">
-        <div>
-          <p className="font-display text-base font-bold text-ink-900">Số liệu {monthLabel(month).toLowerCase()}</p>
-          <p className="text-xs text-slate-500">{manager ? 'Chứng từ đã kết chuyển, tính theo ngày tiền ra / vào két' : 'Chứng từ của tôi đã kết chuyển'}</p>
-        </div>
-        <MonthPicker value={month} onChange={setMonth} />
+      <div className="px-4 sm:px-5 pt-4">
+        <p className="font-display text-base font-bold text-ink-900">{treasury ? 'Tiền mặt và các khoản cần chi' : 'Các khoản tôi đề nghị chi'}</p>
+        <p className="text-xs text-slate-500">
+          {treasury ? 'Đối chiếu tiền mặt đang có với chứng từ chờ duyệt và chờ kết chuyển để biết duyệt, kết chuyển được những khoản nào' : 'Chứng từ của tôi đang chờ duyệt hoặc chờ kết chuyển'}
+        </p>
       </div>
-      <div className="grid grid-cols-3 gap-3 sm:gap-6 px-4 sm:px-5 pt-4 pb-3">
-        <Figure label="Tổng thu" value={ready ? s.cashIn : 0} tone="text-jade-700" sub={`${s.receipts} chứng từ`} />
-        <Figure label="Tổng chi" value={ready ? s.cashOut : 0} tone="text-vermilion-600" sub={`${s.payments} chứng từ`} />
+      <div className={cx('grid gap-3 sm:gap-6 px-4 sm:px-5 pt-4 pb-3', treasury ? 'grid-cols-2' : 'grid-cols-1')}>
+        {treasury && <Figure label="Số tiền mặt khả dụng" value={cash} tone="text-jade-700" sub={holdersLine || 'tồn quỹ tiền mặt hiện tại'} />}
         <Figure
-          label={
-            <>
-              <span className="sm:hidden">Thu − chi</span>
-              <span className="hidden sm:inline">Chênh lệch thu − chi</span>
-            </>
+          label="Số tiền cần phải chi"
+          value={ready ? need : 0}
+          tone={need > 0 ? 'text-vermilion-600' : 'text-slate-400'}
+          align={treasury ? 'right' : 'left'}
+          sub={
+            need > 0 ? (
+              <>
+                chờ duyệt <Money value={s.pendingOut} /> · chờ kết chuyển <Money value={s.approvedOut} />
+              </>
+            ) : (
+              'không có khoản nào'
+            )
           }
-          value={ready ? s.net : 0}
-          sign
-          tone={s.net < 0 ? 'text-rose-600' : 'text-ink-900'}
-          sub={<span className="hidden sm:inline">tiền mặt qua chứng từ</span>}
-          align="right"
         />
       </div>
-      {parts.length > 0 && (
-        <p className="px-4 sm:px-5 pb-3 text-xs text-slate-500">
-          Chi gồm{' '}
-          {parts.map(([k, v], i) => (
-            <span key={k}>
-              {i > 0 && ' · '}
-              {k} <Money value={v} className="font-medium text-slate-700" />
-            </span>
-          ))}
-          {s.inByType.TT > 0 && (
-            <>
-              {' '}
-              — thu hoàn ứng <Money value={s.inByType.TT} className="font-medium text-slate-700" />
-            </>
-          )}
-        </p>
+      {treasury && ready && need > 0 && (
+        <div className="px-4 sm:px-5 pb-4">
+          <CoverBars cash={cash} approvedOut={s.approvedOut} pendingOut={s.pendingOut} />
+          <div className="mt-2.5 grid gap-1 text-xs text-slate-600 sm:grid-cols-2 sm:gap-4">
+            {s.approvedCount > 0 && (
+              <p className="flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-sapphire-500" />
+                <span>
+                  Kết chuyển {s.approvedCount} chứng từ đã duyệt: <Left v={afterApproved} />
+                </span>
+              </p>
+            )}
+            {s.pendingCount > 0 && (
+              <p className="flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" />
+                <span>
+                  Duyệt thêm {s.pendingCount} chứng từ chờ duyệt: <Left v={afterAll} />
+                </span>
+              </p>
+            )}
+          </div>
+        </div>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-slate-100 border-t border-slate-100">
-        <MiniStat label="Chi phí đã ghi nhận" value={<Money value={s.expense} />} sub="theo TK chi phí (15x, 6xx, 8xx)" />
         <MiniStat
           label="Chờ duyệt"
           value={`${s.pendingCount} chứng từ`}
@@ -204,6 +243,7 @@ function VoucherSummary({ stats, month, setMonth, manager, ready, onGo }) {
           tone={s.advanceOpen ? 'text-amber-700' : 'text-slate-400'}
           onClick={s.advanceCount ? () => onGo('advances') : undefined}
         />
+        <MiniStat label="Chi phí ghi nhận tháng này" value={<Money value={s.expense} />} sub="theo TK chi phí (15x, 6xx, 8xx)" />
       </div>
     </Card>
   );
@@ -256,8 +296,17 @@ export default function Vouchers({ params }) {
   const approved = useMemo(() => all.filter((v) => v.status === 'APPROVED' && !v.auto).sort((a, b) => (a.date || '').localeCompare(b.date || '')), [all]);
   const advances = useMemo(() => openAdvances(all), [all]);
   const batches = useMemo(() => [...(data.batches || [])].sort((a, b) => (b.code || '').localeCompare(a.code || '')), [data.batches]);
-  const [statMonth, setStatMonth] = useState(currentMonth());
-  const stats = useMemo(() => voucherStats(all, statMonth), [all, statMonth]);
+  const stats = useMemo(() => voucherStats(all, currentMonth()), [all]);
+  const treasury = can(role, 'viewTreasury');
+  const holders = useCashHolders(treasury);
+  const cashNow = useMemo(() => (treasury ? cashBalance(data.cash) : 0), [treasury, data.cash]);
+  const holdersLine = useMemo(() => {
+    if (!treasury) return '';
+    const bal = holderBalances(data.cash);
+    const parts = holders.active.filter((h) => (bal[h.id] || 0) !== 0);
+    if (parts.length < 2) return '';
+    return parts.map((h) => `${h.name} ${fmtVND(bal[h.id] || 0)}`).join(' · ');
+  }, [treasury, data.cash, holders]);
   const goTab = (t) => {
     setTab(t);
     if (t === 'all') setStatusFilter('PENDING');
@@ -396,7 +445,7 @@ export default function Vouchers({ params }) {
         </div>
       )}
 
-      <VoucherSummary stats={stats} month={statMonth} setMonth={setStatMonth} manager={manager} ready={!!data.vouchersReady} onGo={goTab} />
+      <VoucherSummary stats={stats} cash={cashNow} treasury={treasury} holdersLine={holdersLine} manager={manager} ready={!!data.vouchersReady} onGo={goTab} />
 
       {/* Bốn cuốn chứng từ để lập nhanh */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -492,6 +541,7 @@ export default function Vouchers({ params }) {
               <Button className="ml-auto" variant="primary" icon={CircleCheck} disabled={!sel.size} loading={busy === 'approve'} onClick={approveSelected}>
                 Duyệt {sel.size || ''} chứng từ đã chọn
               </Button>
+              <p className="w-full text-[11px] text-slate-500">Duyệt hàng loạt là duyệt toàn bộ số đề nghị. Muốn duyệt một phần, bấm vào từng chứng từ rồi chọn “Duyệt” → “Duyệt một phần”.</p>
             </div>
             {pending.length === 0 ? (
               <EmptyState icon={ClipboardCheck} title="Không có chứng từ chờ duyệt" description="Chứng từ nhân viên gửi duyệt sẽ hiện ở đây." />

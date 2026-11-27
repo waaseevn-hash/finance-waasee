@@ -6,9 +6,10 @@ import { AuditedBatch, C, friendlyError } from '../../lib/db.js';
 import { can } from '../../lib/roles.js';
 import { fmtDate } from '../../lib/dates.js';
 import { fmtVND } from '../../lib/format.js';
-import { VTYPE, accountName, advanceRemaining, itemAmount, settlement, voucherAmount } from '../../lib/vouchers.js';
+import { VTYPE, accountName, advanceRemaining, isPartial, itemAmount, requestedAmount, settlement, voucherAmount } from '../../lib/vouchers.js';
+import { ApproveVoucherModal } from './ApproveVoucherModal.jsx';
 import { moneyToWords } from '../../lib/vnwords.js';
-import { approveVouchers, deleteVoucher, loadAttachments, postVouchers, rejectVoucher, reverseVoucher } from '../../lib/voucherService.js';
+import { deleteVoucher, loadAttachments, postVouchers, rejectVoucher, reverseVoucher } from '../../lib/voucherService.js';
 import { todayISO } from '../../lib/dates.js';
 import { cashBalance } from '../../lib/calc.js';
 import { useConfirm, useToast } from '../feedback.jsx';
@@ -83,6 +84,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState('');
   const [reason, setReason] = useState(null); // 'reject' | 'reverse'
+  const [approving, setApproving] = useState(false);
 
   const manager = can(role, 'approveVouchers');
   const owner = can(role, 'reverseVouchers');
@@ -142,7 +144,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
       b.update(C.vouchers, v.id, { status: 'DRAFT' }, v, `Rút về nháp ${VTYPE[v.type].short} ${v.person} · ${fmtVND(amount)}`);
       await b.commit();
     }, 'Đã rút về nháp');
-  const approve = () => run('approve', () => approveVouchers({ actor, ids: [v.id] }), 'Đã duyệt — chứng từ được cấp số và chuyển sang “Chờ kết xuất”');
+  const approve = () => setApproving(true);
   const unapprove = async () => {
     const ok = await confirm({ title: `Hủy duyệt ${v.no}?`, message: 'Chứng từ quay về “Chờ duyệt” và giữ nguyên số đã cấp.', confirmText: 'Hủy duyệt' });
     if (ok) run('unapprove', () => rejectVoucher({ actor, v, toPending: true }), 'Đã hủy duyệt');
@@ -250,6 +252,11 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
             </div>
             <p className="mt-2 font-display text-3xl font-bold tabular-nums tracking-tight">{fmtVND(amount)}</p>
             <p className="text-xs italic text-white/85">{moneyToWords(amount)}</p>
+            {isPartial(v) && (
+              <p className="mt-1.5 inline-block rounded-md bg-white/15 px-2 py-0.5 text-xs text-white">
+                Duyệt một phần · đề nghị {fmtVND(requestedAmount(v))}
+              </p>
+            )}
           </div>
         }
         footer={footer}
@@ -265,6 +272,16 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
             )}
             : {v.rejectReason}
           </div>
+        )}
+        {isPartial(v) && (
+          <div className="mb-4 rounded-xl border border-sapphire-200 bg-sapphire-50 px-3 py-2 text-sm text-sapphire-900">
+            <b>Duyệt một phần:</b> <Money value={amount} className="font-semibold" /> trên số đề nghị <Money value={requestedAmount(v)} /> — không duyệt{' '}
+            <Money value={requestedAmount(v) - amount} className="font-semibold" />
+            {v.approvalNote && <span className="block text-xs text-sapphire-800">Lý do: {v.approvalNote}</span>}
+          </div>
+        )}
+        {!isPartial(v) && v.approvalNote && ['APPROVED', 'POSTED'].includes(v.status) && (
+          <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">Ghi chú duyệt: {v.approvalNote}</div>
         )}
         {v.status === 'CANCELLED' && (
           <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -317,8 +334,14 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
                 </tbody>
               </table>
               <div className="divide-y divide-slate-100 border-t border-slate-200 text-sm">
+                {isPartial(v) && (
+                  <div className="flex justify-between px-3 py-2 text-slate-500">
+                    <span>Tổng cộng bảng kê</span>
+                    <Money value={requestedAmount(v)} />
+                  </div>
+                )}
                 <div className="flex justify-between px-3 py-2 bg-orchid-50/50">
-                  <span className="font-semibold">Tổng cộng (A)</span>
+                  <span className="font-semibold">{isPartial(v) ? 'Được duyệt thanh toán (A)' : 'Tổng cộng (A)'}</span>
                   <Money value={s.A} className="font-bold" />
                 </div>
                 <div className="flex justify-between px-3 py-2">
@@ -495,6 +518,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted }
           </button>
         </div>
       )}
+      {approving && <ApproveVoucherModal voucher={v} onClose={() => setApproving(false)} />}
     </>
   );
 }

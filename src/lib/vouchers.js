@@ -84,15 +84,34 @@ export function itemsTotal(items) {
   return (items || []).reduce((s, it) => s + itemAmount(it), 0);
 }
 
-/** Số tiền chính của chứng từ (TT = Tổng cộng A) */
-export function voucherAmount(v) {
+/** Số tiền đề nghị ghi trên chứng từ (TT = tổng bảng kê) */
+export function requestedAmount(v) {
   if (!v) return 0;
   return v.type === 'TT' ? itemsTotal(v.items) : round(v.amount);
 }
 
-/** Quyết toán GĐNTT: A tổng chi, B đã tạm ứng */
+/** Loại chứng từ được duyệt một phần (phiếu thu luôn duyệt đủ số đã thu) */
+export const PARTIAL_TYPES = ['TU', 'TT', 'PC'];
+
+/**
+ * Đã duyệt một phần: số được duyệt (approvedAmount) nhỏ hơn số đề nghị.
+ * Chỉ có hiệu lực khi chứng từ đang Đã duyệt / Đã kết chuyển (hủy duyệt thì trở lại số đề nghị).
+ */
+export function isPartial(v) {
+  if (!v || !PARTIAL_TYPES.includes(v.type) || !['APPROVED', 'POSTED'].includes(v.status)) return false;
+  const a = round(v.approvedAmount);
+  return a > 0 && a < requestedAmount(v);
+}
+
+/** Số tiền chính của chứng từ: số được duyệt nếu duyệt một phần, không thì số đề nghị (TT = A) */
+export function voucherAmount(v) {
+  if (!v) return 0;
+  return isPartial(v) ? round(v.approvedAmount) : requestedAmount(v);
+}
+
+/** Quyết toán GĐNTT: A tổng chi được thanh toán (đã trừ phần không duyệt), B đã tạm ứng */
 export function settlement(v) {
-  const A = v?.type === 'TT' ? itemsTotal(v.items) : 0;
+  const A = v?.type === 'TT' ? voucherAmount(v) : 0;
   const B = Math.max(0, round(v?.advanceAmount));
   return { A, B, cleared: Math.min(A, B), refund: Math.max(0, B - A), extra: Math.max(0, A - B) };
 }
@@ -101,10 +120,10 @@ export function settlement(v) {
 export function cashEffect(v) {
   switch (v?.type) {
     case 'PT':
-      return { in: round(v.amount), out: 0 };
+      return { in: voucherAmount(v), out: 0 };
     case 'PC':
     case 'TU':
-      return { in: 0, out: round(v.amount) };
+      return { in: 0, out: voucherAmount(v) };
     case 'TT': {
       const s = settlement(v);
       return s.B > 0 ? { in: s.refund, out: s.extra } : { in: 0, out: s.A };
@@ -144,7 +163,7 @@ export function validateVoucher(v, { advances = [] } = {}) {
 /** Số tạm ứng còn phải quyết toán của một giấy tạm ứng đã kết chuyển */
 export function advanceRemaining(tu) {
   if (!tu || tu.type !== 'TU' || tu.status !== 'POSTED') return 0;
-  return Math.max(0, round(tu.amount) - round(tu.settledAmount));
+  return Math.max(0, voucherAmount(tu) - round(tu.settledAmount));
 }
 
 /** Các giấy tạm ứng còn dư nợ, nhóm theo người */
@@ -272,19 +291,19 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
     const genIds = [];
 
     if (v.type === 'PT') {
-      const amount = round(v.amount);
+      const amount = voucherAmount(v);
       patch.entries = [{ debit: '1111', credit: v.credit || '141', amount }];
       cashIds.push(cashFor(v.id, seq++, 'IN', { amount, date: v.date, description: `${no} — ${v.reason}`, counterparty: v.person, voucherId: v.id, voucherNo: no }));
       receiptsCount += 1;
       receiptsTotal += amount;
     } else if (v.type === 'PC') {
-      const amount = round(v.amount);
+      const amount = voucherAmount(v);
       patch.entries = [{ debit: v.debit || '642', credit: '1111', amount }];
       cashIds.push(cashFor(v.id, seq++, 'OUT', { amount, date: v.date, description: `${no} — ${v.reason}`, counterparty: v.person, voucherId: v.id, voucherNo: no }));
       paymentsCount += 1;
       paymentsTotal += amount;
     } else if (v.type === 'TU') {
-      const amount = round(v.amount);
+      const amount = voucherAmount(v);
       const g = makeGenerated({ ...v, no }, 'PC', amount, '141', '1111', `Chi tạm ứng: ${v.reason}`, `01 Giấy đề nghị tạm ứng số ${no}`);
       genIds.push(g.id);
       printSet.push({ id: g.id, ...g.data });
@@ -322,7 +341,7 @@ export function buildPostingPlan({ vouchers, advances = {}, counters = {}, postD
           if (!adv) throw new Error(`Không tìm thấy giấy tạm ứng liên kết với ${no}`);
           if (adv.status !== 'POSTED') throw new Error(`Giấy tạm ứng ${adv.no || ''} liên kết với ${no} chưa được kết chuyển`);
           const prev = advanceUpdates[v.advanceId]?.settledAmount ?? round(adv.settledAmount);
-          if (prev + s.B > round(adv.amount)) throw new Error(`Số quyết toán vượt số tạm ứng còn lại của ${adv.no}`);
+          if (prev + s.B > voucherAmount(adv)) throw new Error(`Số quyết toán vượt số tạm ứng còn lại của ${adv.no}`);
           advanceUpdates[v.advanceId] = { settledAmount: prev + s.B, before: adv };
         }
       } else {
@@ -510,6 +529,8 @@ export function voucherStats(vouchers = [], month) {
     inByType,
     pendingCount: pending.length,
     pendingAmount: pending.reduce((s, v) => s + voucherAmount(v), 0),
+    pendingIn: pending.reduce((s, v) => s + cashEffect(v).in, 0),
+    pendingOut: pending.reduce((s, v) => s + cashEffect(v).out, 0),
     approvedCount: approved.length,
     approvedIn: approved.reduce((s, v) => s + cashEffect(v).in, 0),
     approvedOut: approved.reduce((s, v) => s + cashEffect(v).out, 0),

@@ -36,7 +36,7 @@ export function can(role, perm) {
 /** Các màn hình và quyền cần có */
 export const ROUTES = [
   { key: 'dashboard', label: 'Tổng quan', short: 'Tổng quan', perm: 'viewPartners' },
-  { key: 'cash', label: 'Tiền mặt trong két', short: 'Két', perm: 'viewTreasury' },
+  { key: 'cash', label: 'Tiền mặt và tiền gửi ngân hàng', short: 'Tiền mặt', perm: 'viewTreasury' },
   { key: 'bank', label: 'Vay & Hạn mức NH', short: 'Ngân hàng', perm: 'viewTreasury' },
   { key: 'partners', label: 'Công nợ đối tác', short: 'Công nợ', perm: 'viewPartners' },
   { key: 'vouchers', label: 'Chứng từ thu chi', short: 'Chứng từ', perm: 'viewVouchers' },
