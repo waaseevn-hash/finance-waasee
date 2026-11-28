@@ -13,7 +13,8 @@ import Partners from './pages/Partners.jsx';
 import Planner from './pages/Planner.jsx';
 import Vouchers from './pages/Vouchers.jsx';
 import Admin from './pages/Admin.jsx';
-import { ROUTES, can } from './lib/roles.js';
+import Work from './pages/Work.jsx';
+import { ROUTES, can, homeRoute } from './lib/roles.js';
 
 /* Điều hướng bằng #ten-man-hinh */
 function parseHash() {
@@ -21,7 +22,11 @@ function parseHash() {
   if (['partners-ap', 'partners-ar', 'partners-ncc', 'partners-chi'].includes(raw)) return { route: 'partners', params: { tab: raw.replace('partners-', '') } };
   const vm = /^vouchers-(all|pending|post|batches|advances)$/.exec(raw);
   if (vm) return { route: 'vouchers', params: { tab: vm[1] } };
-  return { route: raw || 'dashboard', params: {} };
+  const wm = /^work-([123])$/.exec(raw);
+  if (wm) return { route: 'work', params: { tab: wm[1] } };
+  // #approve: mở ngăn duyệt nhanh (link trong tin nhắn Telegram) — xử lý ở chuông thông báo
+  if (raw === 'approve') return { route: '', params: {}, approve: true };
+  return { route: raw, params: {} };
 }
 
 function useHashRoute() {
@@ -40,7 +45,7 @@ function useHashRoute() {
   return { ...loc, navigate };
 }
 
-const PAGES = { dashboard: Dashboard, cash: Cashbook, bank: BankCredit, partners: Partners, vouchers: Vouchers, planner: Planner, admin: Admin };
+const PAGES = { work: Work, dashboard: Dashboard, cash: Cashbook, bank: BankCredit, partners: Partners, vouchers: Vouchers, planner: Planner, admin: Admin };
 
 function Main() {
   const { role } = useAuth();
@@ -48,7 +53,7 @@ function Main() {
   const { route, params, navigate } = useHashRoute();
   const def = ROUTES.find((r) => r.key === route);
   const allowed = def && can(role, def.perm);
-  const key = allowed ? route : 'dashboard';
+  const key = allowed ? route : homeRoute(role);
   const Page = PAGES[key];
   return (
     <Layout route={key} navigate={navigate}>

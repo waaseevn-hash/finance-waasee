@@ -108,6 +108,7 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
   const toast = useToast();
   const company = useCompany();
   const manager = can(role, 'approveVouchers');
+  const acct = can(role, 'accountingView');
   const [vid] = useState(() => existing?.id || newId(C.vouchers));
   const [form, setForm] = useState(() => initialForm({ type: newType, existing, prefill, me, company }));
   const [error, setError] = useState('');
@@ -329,13 +330,13 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
               </Field>
             )}
             {type === 'PT' && (
-              <Field label={`Tài khoản ghi Có (Nợ ${bank ? '1121' : '1111'})`} className="sm:col-span-3">
-                <AccountSelect set="ptCredit" value={form.credit} onChange={(v) => set({ credit: v })} />
+              <Field label={acct ? `Tài khoản ghi Có (Nợ ${bank ? '1121' : '1111'})` : 'Khoản thu'} className="sm:col-span-3">
+                <AccountSelect set="ptCredit" plain={!acct} value={form.credit} onChange={(v) => set({ credit: v })} />
               </Field>
             )}
             {type === 'PC' && (
-              <Field label={`Tài khoản ghi Nợ (Có ${bank ? '1121' : '1111'})`} className="sm:col-span-3">
-                <AccountSelect set="pcDebit" value={form.debit} onChange={(v) => set({ debit: v })} />
+              <Field label={acct ? `Tài khoản ghi Nợ (Có ${bank ? '1121' : '1111'})` : 'Khoản chi'} className="sm:col-span-3">
+                <AccountSelect set="pcDebit" plain={!acct} value={form.debit} onChange={(v) => set({ debit: v })} />
               </Field>
             )}
             <div className="sm:col-span-6 -mt-1">
@@ -448,7 +449,7 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
                       </option>
                     ))}
                   </Select>
-                  {!advances.length && <span className="mt-1 block text-xs text-slate-500">Chưa có giấy tạm ứng nào đã kết chuyển còn dư nợ. Dùng “Nhập tay” nếu tạm ứng ngoài phần mềm.</span>}
+                  {!advances.length && <span className="mt-1 block text-xs text-slate-500">Chưa có giấy tạm ứng nào đã chốt sổ còn dư nợ. Dùng “Nhập tay” nếu tạm ứng ngoài phần mềm.</span>}
                 </Field>
               )}
               {form.advanceMode !== 'none' && (
@@ -457,10 +458,10 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
                 </Field>
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Tài khoản chi phí (ghi Nợ)">
-                  <AccountSelect set="expense" value={form.expenseAccount} onChange={(v) => set({ expenseAccount: v })} />
+                <Field label={acct ? 'Tài khoản chi phí (ghi Nợ)' : 'Loại chi phí'}>
+                  <AccountSelect set="expense" plain={!acct} value={form.expenseAccount} onChange={(v) => set({ expenseAccount: v })} />
                 </Field>
-                <SettlementNote s={s} account={form.expenseAccount} />
+                <SettlementNote s={s} account={form.expenseAccount} acct={acct} />
               </div>
             </div>
           </div>
@@ -481,12 +482,12 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
                 set(patch);
               }}
               options={[
-                { value: 'CASH', label: 'Tiền mặt (111)' },
-                { value: 'BANK', label: 'Chuyển khoản (112)' },
+                { value: 'CASH', label: acct ? 'Tiền mặt (111)' : 'Tiền mặt' },
+                { value: 'BANK', label: acct ? 'Chuyển khoản (112)' : 'Chuyển khoản' },
               ]}
             />
           </div>
-          {bank && type === 'PT' && <p className="text-xs text-slate-500">Tiền vào tài khoản ngân hàng của công ty (Nợ 1121). Chọn tài khoản nhận khi kết chuyển.</p>}
+          {bank && type === 'PT' && <p className="text-xs text-slate-500">Tiền vào tài khoản ngân hàng của công ty{acct ? ' (Nợ 1121)' : ''}. Chọn tài khoản nhận khi chốt sổ.</p>}
           {bank && type !== 'PT' && (
             <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
               <Field label="Tên chủ tài khoản nhận" className="sm:col-span-3">
@@ -517,10 +518,10 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
-          <Field label="Kèm theo (số chứng từ gốc)" className={type === 'PT' || type === 'PC' ? 'sm:col-span-4' : 'sm:col-span-6'}>
+          <Field label="Kèm theo (số chứng từ gốc)" className={acct && (type === 'PT' || type === 'PC') ? 'sm:col-span-4' : 'sm:col-span-6'}>
             <Input value={form.attachedDocs} onChange={(e) => set({ attachedDocs: e.target.value })} placeholder="02 hóa đơn GTGT" />
           </Field>
-          {(type === 'PT' || type === 'PC') && (
+          {acct && (type === 'PT' || type === 'PC') && (
             <Field label="Quyển số" className="sm:col-span-2">
               <Input value={form.bookNo} onChange={(e) => set({ bookNo: e.target.value })} placeholder={company.bookNo} />
             </Field>
@@ -591,23 +592,27 @@ export function VoucherEditor({ type: newType, existing = null, prefill = null, 
   );
 }
 
-function SettlementNote({ s, account }) {
+function SettlementNote({ s, account, acct = true }) {
   if (!s) return null;
   let tone = 'bg-slate-50 border-slate-200 text-slate-700';
   let title = 'Thanh toán trực tiếp';
-  let body = `Khi kết chuyển: lập Phiếu chi ${fmtVND(s.A)} (Nợ ${account} / Có 1111).`;
+  let body = acct ? `Khi chốt sổ: lập Phiếu chi ${fmtVND(s.A)} (Nợ ${account} / Có 1111).` : `Khi chốt sổ: chi ${fmtVND(s.A)} cho người đề nghị.`;
   if (s.B > 0 && s.refund > 0) {
     tone = 'bg-jade-50 border-jade-100 text-jade-800';
     title = `Số tạm ứng chi không hết: ${fmtVND(s.refund)}`;
-    body = `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Người đề nghị nộp lại quỹ ${fmtVND(s.refund)} — tự lập Phiếu thu (Nợ 1111 / Có 141).`;
+    body = acct
+      ? `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Người đề nghị nộp lại quỹ ${fmtVND(s.refund)} — tự lập Phiếu thu (Nợ 1111 / Có 141).`
+      : `Trừ vào tạm ứng ${fmtVND(s.cleared)}. Người đề nghị nộp lại quỹ ${fmtVND(s.refund)}.`;
   } else if (s.B > 0 && s.extra > 0) {
     tone = 'bg-vermilion-50 border-vermilion-100 text-vermilion-800';
     title = `Chi quá số tạm ứng: ${fmtVND(s.extra)}`;
-    body = `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Công ty chi bổ sung ${fmtVND(s.extra)} — tự lập Phiếu chi (Nợ ${account} / Có 1111).`;
+    body = acct
+      ? `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Công ty chi bổ sung ${fmtVND(s.extra)} — tự lập Phiếu chi (Nợ ${account} / Có 1111).`
+      : `Trừ vào tạm ứng ${fmtVND(s.cleared)}. Công ty chi bổ sung ${fmtVND(s.extra)}.`;
   } else if (s.B > 0) {
     tone = 'bg-sapphire-50 border-sapphire-100 text-sapphire-800';
     title = 'Quyết toán vừa đủ tạm ứng';
-    body = `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Không phát sinh thu / chi tiền mặt.`;
+    body = acct ? `Nợ ${account} / Có 141: ${fmtVND(s.cleared)}. Không phát sinh thu / chi tiền mặt.` : `Trừ hết vào tạm ứng ${fmtVND(s.cleared)}. Không phát sinh thu / chi thêm.`;
   }
   return (
     <div className={cx('rounded-lg border px-3 py-2 text-xs leading-relaxed self-end', tone)}>

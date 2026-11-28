@@ -8,6 +8,7 @@ import {
   HandCoins,
   Landmark,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   ShieldCheck,
   Vault,
@@ -16,10 +17,14 @@ import { APP_CONFIG } from '../firebase-config.js';
 import { LOGO, useCompanyName } from '../lib/brand.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePrivacy } from '../context/PrivacyContext.jsx';
-import { ROLE_LABEL, ROUTES, can } from '../lib/roles.js';
+import { ROLE_LABEL, ROUTES, can, routeLabel, routeShort } from '../lib/roles.js';
+import { NotificationBell } from './NotificationCenter.jsx';
+import { useData } from '../context/DataContext.jsx';
+import { usePayAccountsSync } from '../lib/holders.js';
 import { Badge, cx } from './ui.jsx';
 
 export const ROUTE_ICON = {
+  work: ListChecks,
   dashboard: LayoutDashboard,
   cash: Vault,
   bank: Landmark,
@@ -96,6 +101,7 @@ function PrivacyButton() {
 }
 
 export const ROUTE_TONE = {
+  work: 'amber',
   dashboard: 'lagoon',
   cash: 'jade',
   bank: 'sapphire',
@@ -132,6 +138,13 @@ const MOBILE_ACTIVE = {
   ink: 'bg-ink-900',
 };
 
+/** Quản lý mở app: giữ danh sách tài khoản thanh toán cho kế toán khớp với ngân hàng */
+function PayAccountsSync() {
+  const data = useData();
+  usePayAccountsSync(data.loaded?.banks ? data.banks : null, true);
+  return null;
+}
+
 export function Layout({ route, navigate, children }) {
   const { role } = useAuth();
   const companyName = useCompanyName();
@@ -139,6 +152,7 @@ export function Layout({ route, navigate, children }) {
 
   return (
     <div className="min-h-screen">
+      {can(role, 'viewTreasury') && <PayAccountsSync />}
       {/* Thanh điều hướng máy tính */}
       <aside className="hidden lg:flex fixed inset-y-0 left-0 z-30 w-64 flex-col bg-gradient-to-b from-ink-900 via-ink-950 to-ink-950 text-white">
         <div className="absolute inset-0 guilloche opacity-60 pointer-events-none" />
@@ -166,7 +180,7 @@ export function Layout({ route, navigate, children }) {
               >
                 {active && <span className={cx('absolute left-0 top-2 bottom-2 w-1 rounded-r-full', NAV_DOT[tone])} />}
                 <Icon className={cx('h-[18px] w-[18px]', active ? NAV_ICON[tone] : '')} />
-                {r.label}
+                {routeLabel(r, role)}
               </button>
             );
           })}
@@ -190,6 +204,7 @@ export function Layout({ route, navigate, children }) {
               {new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}
             </p>
             <div className="flex items-center gap-1 sm:gap-2">
+              <NotificationBell navigate={navigate} />
               <PrivacyButton />
               <UserMenu />
             </div>
@@ -217,7 +232,7 @@ export function Layout({ route, navigate, children }) {
               <span className={cx('grid h-7 w-11 place-items-center rounded-full transition-colors', active && cx(MOBILE_ACTIVE[ROUTE_TONE[r.key]], 'text-white'))}>
                 <Icon className="h-[18px] w-[18px]" />
               </span>
-              {r.short}
+              {routeShort(r, role)}
             </button>
           );
         })}

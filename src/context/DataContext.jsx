@@ -60,8 +60,27 @@ export function DataProvider({ children }) {
       subs.push(subscribeCollection(C.vouchers, onRows('vouchers'), onVErr('vouchers')));
       subs.push(subscribeCollection(C.batches, onRows('batches'), onVErr('batches')));
     } else if (email) {
-      subs.push(subscribeWhere(C.vouchers, 'requestedBy', email, onRows('vouchers'), onVErr('vouchers')));
-      setLoaded((l) => ({ ...l, batches: true }));
+      // Kế toán: đề xuất của mình + mọi khoản Sếp đã duyệt / đã chốt sổ (để đi chi và lưu chứng từ)
+      const parts = { own: null, approved: null, posted: null };
+      const merge = () => {
+        if (Object.values(parts).some((x) => x === null)) return;
+        const byId = new Map();
+        for (const list of Object.values(parts)) for (const v of list) byId.set(v.id, v);
+        onRows('vouchers')([...byId.values()]);
+      };
+      const part = (k) => (rows) => {
+        parts[k] = rows;
+        merge();
+      };
+      // Luật chưa cập nhật: phần đã duyệt / đã chốt báo lỗi thì vẫn hiện đề xuất của mình
+      const soft = (k) => () => {
+        parts[k] = [];
+        merge();
+      };
+      subs.push(subscribeWhere(C.vouchers, 'requestedBy', email, part('own'), onVErr('vouchers')));
+      subs.push(subscribeWhere(C.vouchers, 'status', 'APPROVED', part('approved'), soft('approved')));
+      subs.push(subscribeWhere(C.vouchers, 'status', 'POSTED', part('posted'), soft('posted')));
+      subs.push(subscribeCollection(C.batches, onRows('batches'), () => setLoaded((l) => ({ ...l, batches: true }))));
     }
     return () => subs.forEach((u) => u());
   }, [role, status, email]);

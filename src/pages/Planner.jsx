@@ -349,7 +349,7 @@ function SnapshotModal({ open, onClose, snap, onPrint, onDelete }) {
       {rows.length === 0 ? (
         <p className="text-sm text-slate-400">Không có khoản nào.</p>
       ) : (
-        <TableWrap className="rounded-xl border border-slate-200">
+        <TableWrap inset={false}>
           <table className="w-full">
             <thead className="bg-slate-50">
               <tr>
@@ -527,11 +527,11 @@ function SummaryCard({ plan, data, onApprove, paidThisMonth, onDeposits }) {
       </button>
       {open && (
       <div className="grid gap-4 px-4 sm:px-5 pb-5 xl:grid-cols-[minmax(0,1fr)_340px] items-start">
-        <div className="min-w-0 rounded-xl border border-slate-200 overflow-hidden">
+        <div className="min-w-0">
           {selected.length === 0 ? (
             <EmptyState icon={BadgeCheck} title="Chưa chọn khoản chi nào" description="Tick chọn các khoản ở bảng ưu tiên phía trên." />
           ) : (
-            <TableWrap>
+            <TableWrap inset={false}>
               <table className="w-full text-sm">
                 <thead className="bg-slate-50/80">
                   <tr>

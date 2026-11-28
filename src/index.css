@@ -130,3 +130,71 @@
 .drawer-in {
   animation: drawer-in 180ms ease-out;
 }
+
+/* ===== Bảng dữ liệu dùng chung (TableWrap / Table) =====
+   Viền ngoài bo góc, kẻ ngang + kẻ dọc mảnh, tiêu đề đậm nền xám xanh,
+   sọc rất nhẹ, đổi màu khi rê chuột, dòng nhóm có thanh màu trái, dòng tổng đậm. */
+.dt-wrap {
+  border: 1px solid var(--color-slate-300);
+  border-radius: 0.75rem;
+  background: #fff;
+  overflow: auto;
+}
+.dt-wrap > table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.dt-wrap > table > thead > tr > th {
+  background: var(--color-slate-100);
+  color: var(--color-slate-700);
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-slate-300);
+  border-right: 1px solid var(--color-slate-200);
+  vertical-align: middle;
+}
+.dt-wrap > table > thead > tr:not(:last-child) > th {
+  border-bottom-width: 1px;
+}
+.dt-wrap > table > tbody > tr > td,
+.dt-wrap > table > tbody > tr > th {
+  border-bottom: 1px solid var(--color-slate-200);
+  border-right: 1px solid var(--color-slate-200);
+}
+.dt-wrap > table > tbody > tr:last-child > td,
+.dt-wrap > table > tbody > tr:last-child > th {
+  border-bottom: 0;
+}
+.dt-wrap > table > * > tr > :last-child {
+  border-right: 0;
+}
+.dt-wrap > table > tbody > tr:nth-child(even) > td {
+  background-color: rgb(248 250 252 / 0.6);
+}
+.dt-wrap > table > tbody > tr:hover > td {
+  background-color: rgb(239 246 255 / 0.55);
+}
+.dt-wrap > table > tfoot > tr > td,
+.dt-wrap > table > tfoot > tr > th {
+  background: var(--color-slate-100);
+  border-top: 2px solid var(--color-slate-300);
+  border-right: 1px solid var(--color-slate-200);
+  font-weight: 700;
+  color: var(--color-ink-900);
+}
+/* Dòng nhóm (P1 / P2 / P3, ngân hàng, loại chứng từ…) */
+/* Dòng nhóm: nền nhạt + vạch màu bên trái (chỉ ở ô đầu), không kẻ dọc giữa các ô */
+.dt-wrap > table > tbody > tr.dt-group > td {
+  background: var(--dt-group-bg, var(--color-slate-50));
+  border-right-color: transparent;
+  font-weight: 600;
+  color: var(--color-ink-900);
+}
+.dt-wrap > table > tbody > tr.dt-group > td:first-child {
+  box-shadow: inset 3px 0 0 var(--dt-group-bar, var(--color-slate-400));
+}
+.dt-wrap > table > tbody > tr.dt-group-red > td { --dt-group-bg: #fff1f2; --dt-group-bar: #e11d48; }
+.dt-wrap > table > tbody > tr.dt-group-amber > td { --dt-group-bg: #fffbeb; --dt-group-bar: #d97706; }
+.dt-wrap > table > tbody > tr.dt-group-blue > td { --dt-group-bg: #eff6ff; --dt-group-bar: #2563eb; }
+.dt-wrap > table > tbody > tr.dt-group-green > td { --dt-group-bg: #ecfdf5; --dt-group-bar: #059669; }

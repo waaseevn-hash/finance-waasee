@@ -29,3 +29,20 @@ self.addEventListener('fetch', (e) => {
       .catch(() => caches.match(req).then((r) => r || caches.match('./'))),
   );
 });
+
+// Bấm vào thông báo: mở (hoặc đưa lên trước) cửa sổ app tại màn hình được gửi kèm (vd #approve)
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const target = new URL(e.notification.data?.url || './', self.registration.scope).href;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if (c.url.startsWith(self.registration.scope) && 'focus' in c) {
+          c.navigate?.(target);
+          return c.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
+});

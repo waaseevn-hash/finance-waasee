@@ -113,7 +113,7 @@ export function BankModal({ open, onClose, initial }) {
         <Field label="Số dư tiền gửi thanh toán (nếu có)" hint="Dùng để tính thanh khoản khả dụng">
           <MoneyInput value={f.depositBalance} onChange={set('depositBalance')} />
         </Field>
-        <Field label="Số tài khoản thanh toán của công ty" hint="In trên lệnh chuyển khoản khi kết chuyển chứng từ">
+        <Field label="Số tài khoản thanh toán của công ty" hint="In trên lệnh chuyển khoản khi chốt sổ chứng từ">
           <Input value={f.accountNo} onChange={set('accountNo')} inputMode="numeric" placeholder="VD: 0021000123456" />
         </Field>
         <Field label="Tên chủ tài khoản" hint="Để trống = tên công ty">

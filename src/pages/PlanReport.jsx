@@ -28,7 +28,7 @@ const GROUP_ROWS = [
   ['SUPPLIER', 'A. Trả nhà cung cấp'],
   ['FIXED', 'B. Chi cố định (lương, thuế, vận hành…)'],
   ['BANK', 'C. Trả ngân hàng (lãi vay, đáo hạn)'],
-  ['INTERNAL', 'D. Chi nội bộ (chứng từ đã duyệt, chờ kết chuyển)'],
+  ['INTERNAL', 'D. Chi nội bộ (chứng từ đã duyệt, chờ chốt sổ)'],
 ];
 
 /** Cân đối nguồn tiền; tính lại được cho cả bản chốt cũ (trước khi có "Tổng có" và giải ngân) */

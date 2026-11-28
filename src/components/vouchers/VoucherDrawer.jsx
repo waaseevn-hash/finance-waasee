@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Ban, CircleCheck, FileText, Link2, Pencil, Printer, RotateCcw, Send, Trash2, Undo2, X } from 'lucide-react';
+import { Ban, CircleCheck, FileText, Link2, Pencil, Printer, RotateCcw, Send, Trash2, Undo2, Wallet, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useData } from '../../context/DataContext.jsx';
 import { AuditedBatch, C, friendlyError } from '../../lib/db.js';
@@ -8,8 +8,9 @@ import { fmtDate } from '../../lib/dates.js';
 import { fmtVND } from '../../lib/format.js';
 import { VTYPE, accountName, advanceRemaining, isBank, isPartial, itemAmount, moneyAccount, requestedAmount, settlement, transferContent, voucherAmount } from '../../lib/vouchers.js';
 import { ApproveVoucherModal } from './ApproveVoucherModal.jsx';
+import { MarkPaidModal } from './MarkPaidModal.jsx';
 import { moneyToWords } from '../../lib/vnwords.js';
-import { deleteVoucher, loadAttachments, postVouchers, rejectVoucher, reverseVoucher } from '../../lib/voucherService.js';
+import { notifyProposed, deleteVoucher, loadAttachments, postVouchers, rejectVoucher, reverseVoucher } from '../../lib/voucherService.js';
 import { todayISO } from '../../lib/dates.js';
 import { cashBalance } from '../../lib/calc.js';
 import { useConfirm, useToast } from '../feedback.jsx';
@@ -88,6 +89,12 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
 
   const manager = can(role, 'approveVouchers');
   const owner = can(role, 'reverseVouchers');
+  const treasury = can(role, 'viewTreasury');
+  const payer = can(role, 'payVouchers') && !manager;
+  const poster = can(role, 'postVouchers');
+  // Thuật ngữ kế toán (TK, Nợ/Có, quyển số, định khoản) chỉ hiện cho Kế toán
+  const acct = can(role, 'accountingView');
+  const [paying, setPaying] = useState(false);
   const mine = v && v.requestedBy === actor.email;
 
   useEffect(() => {
@@ -137,6 +144,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
       const b = new AuditedBatch(actor);
       b.update(C.vouchers, v.id, { status: 'PENDING', submittedOn: todayISO(), rejectReason: '' }, v, `Gửi duyệt ${VTYPE[v.type].short} ${v.person} · ${fmtVND(amount)}`);
       await b.commit();
+      notifyProposed(v, actor);
     }, 'Đã gửi duyệt');
   const backToDraft = () =>
     run('draft', async () => {
@@ -162,16 +170,16 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
     if (isBank(v) && onPostBank) return onPostBank(v);
     const eff = v.type === 'PT' ? 'thu' : 'chi';
     const ok = await confirm({
-      title: `Kết chuyển ngay ${v.no}?`,
+      title: `Chốt sổ ngay ${v.no}?`,
       message: `Ghi sổ quỹ tiền mặt (${eff} ${fmtVND(amount)}${v.type === 'TT' ? ' theo quyết toán' : ''}), sinh phiếu tự động nếu có, rồi khóa chứng từ. Sau đó mở bản in.`,
-      confirmText: 'Kết chuyển',
+      confirmText: 'Chốt sổ',
     });
     if (!ok) return;
-    const before = cashBalance(data.cash);
+    const before = treasury ? cashBalance(data.cash) : null;
     run('post', async () => {
-      const res = await postVouchers({ actor, ids: [v.id], postDate: todayISO() });
-      onPosted?.({ ...res, cash: { before } });
-    }, 'Đã kết chuyển');
+      const res = await postVouchers({ actor, ids: [v.id], postDate: todayISO(), canReadBanks: treasury });
+      onPosted?.({ ...res, cash: treasury ? { before } : null });
+    }, 'Đã chốt sổ');
   };
 
   const printDocs = () => {
@@ -218,18 +226,23 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
         </>
       )}
       {manager && v.status === 'APPROVED' && !v.auto && (
-        <>
-          <Button variant="ghost" icon={Undo2} loading={busy === 'unapprove'} onClick={unapprove}>
-            Hủy duyệt
-          </Button>
-          <Button variant="primary" icon={CircleCheck} loading={busy === 'post'} onClick={postNow}>
-            Kết chuyển ngay
-          </Button>
-        </>
+        <Button variant="ghost" icon={Undo2} loading={busy === 'unapprove'} onClick={unapprove}>
+          Hủy duyệt
+        </Button>
+      )}
+      {payer && v.status === 'APPROVED' && !v.auto && (
+        <Button variant={v.paidAt ? 'secondary' : 'jade'} icon={Wallet} onClick={() => setPaying(true)}>
+          {v.paidAt ? 'Sửa thông tin đã chi' : 'Đã chi tiền'}
+        </Button>
+      )}
+      {poster && v.status === 'APPROVED' && !v.auto && (
+        <Button variant="primary" icon={CircleCheck} loading={busy === 'post'} onClick={postNow}>
+          Chốt sổ ngay
+        </Button>
       )}
       {owner && v.status === 'POSTED' && !v.auto && (
         <Button variant="danger" icon={RotateCcw} onClick={() => setReason('reverse')}>
-          Hủy kết chuyển
+          Hủy chốt sổ
         </Button>
       )}
     </div>
@@ -243,7 +256,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
         tone={TONE[v.type]}
         icon={Icon}
         title={VTYPE[v.type].label}
-        subtitle={`${VTYPE[v.type].form}${v.no ? ` · Số ${v.no}` : ' · chưa cấp số'}${v.auto ? ' · sinh tự động khi kết chuyển' : ''}`}
+        subtitle={`${VTYPE[v.type].form}${v.no ? ` · Số ${v.no}` : ' · chưa cấp số'}${v.auto ? ' · sinh tự động khi chốt sổ' : ''}`}
         hero={
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -287,7 +300,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
         )}
         {v.status === 'CANCELLED' && (
           <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            Phiếu này đã bị hủy do chứng từ gốc được hủy kết chuyển{v.cancelReason ? `: ${v.cancelReason}` : ''}.
+            Phiếu này đã bị hủy do chứng từ gốc được hủy chốt sổ{v.cancelReason ? `: ${v.cancelReason}` : ''}.
           </div>
         )}
 
@@ -303,13 +316,27 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
               Đã quyết toán <Money value={v.settledAmount || 0} className="font-semibold" /> · còn <Money value={advanceRemaining(v)} className="font-semibold text-amber-700" />
             </Row>
           )}
-          {v.type === 'PT' && <Row label="Định khoản">Nợ {moneyAccount(v)} / Có {v.credit} — {accountName(v.credit)}</Row>}
-          {v.type === 'PC' && <Row label="Định khoản">Nợ {v.debit} — {accountName(v.debit)} / Có {moneyAccount(v)}</Row>}
-          {(v.type === 'PT' || v.type === 'PC') && <Row label="Quyển số">{v.bookNo}</Row>}
+          {acct && v.type === 'PT' && <Row label="Định khoản">Nợ {moneyAccount(v)} / Có {v.credit} — {accountName(v.credit)}</Row>}
+          {acct && v.type === 'PC' && <Row label="Định khoản">Nợ {v.debit} — {accountName(v.debit)} / Có {moneyAccount(v)}</Row>}
+          {!acct && v.type === 'PT' && v.credit && <Row label="Khoản thu">{accountName(v.credit)}</Row>}
+          {!acct && v.type === 'PC' && v.debit && <Row label="Khoản chi">{accountName(v.debit)}</Row>}
+          {acct && (v.type === 'PT' || v.type === 'PC') && <Row label="Quyển số">{v.bookNo}</Row>}
           <Row label="Kèm theo">{v.attachedDocs ? `${v.attachedDocs} chứng từ gốc` : ''}</Row>
           <Row label={v.type === 'PT' ? 'Hình thức nhận' : 'Hình thức chi'}>
-            {isBank(v) ? <span className="font-medium text-sapphire-700">Chuyển khoản (TK 112)</span> : 'Tiền mặt (TK 111)'}
+            {isBank(v) ? <span className="font-medium text-sapphire-700">Chuyển khoản{acct ? ' (TK 112)' : ''}</span> : `Tiền mặt${acct ? ' (TK 111)' : ''}`}
           </Row>
+          {v.status === 'APPROVED' && (
+            <Row label="Đã chi tiền">
+              {v.paidAt ? (
+                <span className="font-medium text-jade-700">
+                  {fmtDate(v.paidAt)} · {v.paidByName || v.paidBy}
+                  {v.paidNote ? <span className="block text-xs font-normal text-slate-500">{v.paidNote}</span> : null}
+                </span>
+              ) : (
+                <span className="text-amber-700">Chưa chi — kế toán chi xong bấm “Đã chi tiền”</span>
+              )}
+            </Row>
+          )}
           {isBank(v) && v.type !== 'PT' && (
             <Row label="Người thụ hưởng">
               <span className="block font-medium">{v.payeeName || v.person}</span>
@@ -332,9 +359,9 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
         {v.type === 'TT' && (
           <div className="mt-4">
             <p className="text-sm font-semibold text-ink-900 mb-2">Bảng kê chi phí</p>
-            <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <div className="dt-wrap">
               <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <thead className="text-xs">
                   <tr>
                     <th className="px-2 py-2 text-center w-8">TT</th>
                     <th className="px-2 py-2 text-left">Tên chi phí</th>
@@ -385,11 +412,11 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
                 )}
               </div>
             </div>
-            <p className="mt-1 text-xs text-slate-500">TK chi phí ghi Nợ: {v.expenseAccount} — {accountName(v.expenseAccount)}</p>
+            <p className="mt-1 text-xs text-slate-500">{acct ? `TK chi phí ghi Nợ: ${v.expenseAccount} — ` : 'Loại chi phí: '}{accountName(v.expenseAccount)}</p>
           </div>
         )}
 
-        {(v.entries || []).length > 0 && (
+        {acct && (v.entries || []).length > 0 && (
           <div className="mt-4">
             <p className="text-sm font-semibold text-ink-900 mb-2">Định khoản đã ghi sổ</p>
             <ul className="rounded-xl border border-slate-200 divide-y divide-slate-100 text-sm">
@@ -443,7 +470,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
               ))}
               {batch && (
                 <li className="text-slate-600">
-                  Đợt kết chuyển <b>{batch.code}</b> ngày {fmtDate(batch.postDate)}
+                  Đợt chốt sổ <b>{batch.code}</b> ngày {fmtDate(batch.postDate)}
                 </li>
               )}
             </ul>
@@ -487,15 +514,15 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
           )}
           {v.postedOn && (
             <p>
-              Kết chuyển ngày {fmtDate(v.postedOn)} {v.postedBy && <>bởi <Who id={v.postedBy} /></>}
+              Chốt sổ ngày {fmtDate(v.postedOn)} {v.postedBy && <>bởi <Who id={v.postedBy} /></>}
             </p>
           )}
           {v.lastReversal?.date && (
             <p className="text-rose-700">
-              Đã hủy kết chuyển {v.reversedCount > 1 ? `${v.reversedCount} lần, lần gần nhất` : ''} ngày {fmtDate(v.lastReversal.date)}: {v.lastReversal.reason}
+              Đã hủy chốt sổ {v.reversedCount > 1 ? `${v.reversedCount} lần, lần gần nhất` : ''} ngày {fmtDate(v.lastReversal.date)}: {v.lastReversal.reason}
             </p>
           )}
-          {v.status === 'POSTED' && <Badge tone="dark">Đã khóa — chỉ Chủ DN được hủy kết chuyển</Badge>}
+          {v.status === 'POSTED' && <Badge tone="dark">Đã chốt sổ & khóa — chỉ Chủ DN được hủy chốt sổ</Badge>}
         </div>
       </Drawer>
 
@@ -517,15 +544,15 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
       />
       <ReasonModal
         open={reason === 'reverse'}
-        title={`Hủy kết chuyển ${v.no}`}
-        label="Lý do hủy kết chuyển"
+        title={`Hủy chốt sổ ${v.no}`}
+        label="Lý do hủy chốt sổ"
         hint="Hệ thống ghi bút toán đảo vào sổ quỹ (không xóa bút toán cũ), hủy các phiếu sinh tự động, trả chứng từ về “Đã duyệt · chờ kết xuất”. Thao tác được ghi Nhật ký."
-        confirmText="Hủy kết chuyển"
+        confirmText="Hủy chốt sổ"
         onClose={() => setReason(null)}
         onConfirm={async (text) => {
           try {
             const plan = await reverseVoucher({ actor, id: v.id, reason: text });
-            toast.success(`Đã hủy kết chuyển — ghi ${plan.reversals.length} bút toán đảo`);
+            toast.success(`Đã hủy chốt sổ — ghi ${plan.reversals.length} bút toán đảo`);
             setReason(null);
           } catch (ex) {
             toast.error(friendlyError(ex));
@@ -541,6 +568,7 @@ export function VoucherDrawer({ id, onClose, onEdit, onPrint, onOpen, onPosted, 
         </div>
       )}
       {approving && <ApproveVoucherModal voucher={v} onClose={() => setApproving(false)} />}
+      {paying && <MarkPaidModal v={v} onClose={() => setPaying(false)} />}
     </>
   );
 }

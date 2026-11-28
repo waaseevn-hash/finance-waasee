@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, getDocs, limit, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { Calculator, ChevronDown, ChevronRight, Crown, FileSpreadsheet, History, Lock, Search, ShieldCheck, Trash2, LockOpen, UserCog, UserPlus, Users } from 'lucide-react';
+import { BellRing, Calculator, ChevronDown, ChevronRight, Crown, FileSpreadsheet, History, Lock, Search, ShieldCheck, Trash2, LockOpen, UserCog, UserPlus, Users } from 'lucide-react';
 import { db } from '../lib/firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { AuditedBatch, C, COLLECTION_LABEL, friendlyError } from '../lib/db.js';
@@ -8,7 +8,8 @@ import { ImportPanel } from '../components/ImportPanel.jsx';
 import { BackupPanel } from '../components/BackupPanel.jsx';
 import { fmtDate, fmtDateTime } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
-import { ROLE_LABEL } from '../lib/roles.js';
+import { ROLE_LABEL, can } from '../lib/roles.js';
+import { NotifySettings } from '../components/NotifySettings.jsx';
 import { CERTAINTY, PAY_METHOD, PRIORITY } from '../lib/constants.js';
 import { downloadXlsx } from '../lib/xlsx.js';
 import { useConfirm, useToast } from '../components/feedback.jsx';
@@ -24,8 +25,8 @@ const FIELD_LABEL = {
   reason: 'Lý do / nội dung',
   approvedBy: 'Người duyệt',
   rejectReason: 'Lý do từ chối',
-  postingBatchId: 'Đợt kết chuyển',
-  postedOn: 'Ngày kết chuyển',
+  postingBatchId: 'Đợt chốt sổ',
+  postedOn: 'Ngày chốt sổ',
   settledAmount: 'Đã quyết toán',
   advanceAmount: 'Đã tạm ứng',
   code: 'Mã đợt',
@@ -104,10 +105,10 @@ function fmtValue(field, v) {
         DRAFT: 'Nháp',
         PENDING: 'Chờ duyệt',
         APPROVED: 'Đã duyệt · chờ kết xuất',
-        POSTED: 'Đã kết chuyển',
+        POSTED: 'Đã chốt sổ',
         REJECTED: 'Từ chối',
-        REVERSED: 'Đã hủy kết chuyển',
-        PARTIAL: 'Hủy kết chuyển một phần',
+        REVERSED: 'Đã hủy chốt sổ',
+        PARTIAL: 'Hủy chốt sổ một phần',
       }[v] || v
     );
   if (field === 'mode') return { FULL: 'Chi hết / trả toàn bộ', PART: 'Chi 1 phần' }[v] || v;
@@ -376,7 +377,7 @@ function AccessPanel() {
 
         <Card>
           <CardHeader title="Mỗi vai trò được làm gì" icon={ShieldCheck} />
-          <TableWrap className="border-t border-slate-100">
+          <TableWrap>
             <table className="w-full">
               <thead className="bg-slate-50/80">
                 <tr>
@@ -390,22 +391,22 @@ function AccessPanel() {
                   <td className={td}>
                     <Badge tone="dark">Chủ doanh nghiệp</Badge>
                   </td>
-                  <td className={td}>Toàn bộ, duyệt chi, phân quyền, nhật ký thao tác</td>
+                  <td className={td}>Toàn bộ, duyệt chi, phân quyền, cấu hình thông báo đẩy, nhật ký thao tác, hủy chốt sổ</td>
                   <td className={td}>—</td>
                 </tr>
                 <tr>
                   <td className={td}>
                     <Badge tone="blue">Đồng quản trị</Badge>
                   </td>
-                  <td className={td}>Tiền mặt, vay ngân hàng, công nợ, duyệt chi, danh bạ NCC, điều phối tháng, chứng từ (duyệt, kết chuyển), phân quyền thành viên, nhật ký thao tác</td>
-                  <td className={td}>Sửa / khóa tài khoản Chủ doanh nghiệp; hủy kết chuyển chứng từ; sao lưu & chuyển dữ liệu</td>
+                  <td className={td}>Tiền mặt, vay ngân hàng, công nợ, duyệt chi, danh bạ NCC, điều phối tháng, đề xuất chi (duyệt), phân quyền thành viên, nhật ký thao tác</td>
+                  <td className={td}>Sửa / khóa tài khoản Chủ doanh nghiệp; hủy chốt sổ; cấu hình thông báo đẩy; sao lưu & chuyển dữ liệu</td>
                 </tr>
                 <tr>
                   <td className={td}>
                     <Badge tone="violet">Kế toán công nợ</Badge>
                   </td>
-                  <td className={td}>Phải thu / phải trả (thêm, sửa, xóa khoản công nợ), lệnh chi đã duyệt → đã chuyển tiền, danh bạ nhà cung cấp, lập chứng từ</td>
-                  <td className={td}>Két tiền mặt, ngân hàng, điều phối tháng, duyệt chi, phân quyền, nhật ký; xóa lẻ từng lần thanh toán, xóa nhà cung cấp</td>
+                  <td className={td}>Việc cần làm: lập & gửi đề xuất, chi khoản Sếp đã duyệt (báo “Đã chi”), chốt sổ tiền mặt / tiền gửi và in chứng từ Thông tư 200; phải thu / phải trả, danh bạ nhà cung cấp</td>
+                  <td className={td}>Xem số dư két / tiền gửi, vay ngân hàng, điều phối tháng, duyệt chi, phân quyền, nhật ký; xóa lẻ từng lần thanh toán, xóa nhà cung cấp</td>
                 </tr>
               </tbody>
             </table>
@@ -688,19 +689,30 @@ function FragmentRow({ l, name, open, onToggle, Details }) {
 }
 
 export default function Admin() {
+  const { role } = useAuth();
   const [tab, setTab] = useState('access');
+  const notify = can(role, 'notifySettings');
   return (
     <div>
-      <PageHeader icon={ShieldCheck} tone="ink" title="Phân quyền & Nhật ký hệ thống" subtitle="Chủ doanh nghiệp và Đồng quản trị" />
+      <PageHeader icon={ShieldCheck} tone="ink" title="Phân quyền & Cài đặt" subtitle="Thành viên, thông báo đẩy và nhật ký thao tác" />
       <Tabs
         value={tab}
         onChange={setTab}
         tabs={[
           { value: 'access', label: 'Thành viên & phân quyền', icon: UserCog },
+          ...(notify ? [{ value: 'notify', label: 'Thông báo đẩy', icon: BellRing }] : []),
           { value: 'audit', label: 'Nhật ký thao tác (Audit Log)', icon: History },
         ]}
       />
-      <div className="mt-4">{tab === 'access' ? <AccessPanel /> : <AuditLog />}</div>
+      <div className="mt-4">
+        {tab === 'access' && <AccessPanel />}
+        {tab === 'notify' && notify && (
+          <div className="max-w-3xl">
+            <NotifySettings />
+          </div>
+        )}
+        {tab === 'audit' && <AuditLog />}
+      </div>
     </div>
   );
 }

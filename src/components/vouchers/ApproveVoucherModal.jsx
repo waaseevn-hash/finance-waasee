@@ -17,7 +17,7 @@ import { VTypeChip } from './common.jsx';
 const roundK = (n) => Math.max(1000, Math.round(n / 1000) * 1000);
 
 /** Duyệt chứng từ: toàn bộ số đề nghị hoặc một phần */
-export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
+export function ApproveVoucherModal({ voucher: v, onClose, onDone, startMode = 'FULL' }) {
   const { actor, role } = useAuth();
   const data = useData();
   const toast = useToast();
@@ -31,7 +31,7 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
 
   useEffect(() => {
     if (!v) return;
-    setMode('FULL');
+    setMode(startMode === 'PART' && PARTIAL_TYPES.includes(v.type) ? 'PART' : 'FULL');
     setAmount(roundK(req / 2));
     setNote('');
     setErr('');
@@ -63,7 +63,7 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
     setBusy(true);
     try {
       const partial = mode === 'PART' ? { [v.id]: { amount: approved, note } } : note.trim() ? { [v.id]: { amount: req, note } } : {};
-      const nums = await approveVouchers({ actor, ids: [v.id], partial });
+      const nums = await approveVouchers({ actor, ids: [v.id], partial, list: [v] });
       toast.success(`Đã duyệt ${mode === 'PART' ? `một phần ${fmtVND(approved)}` : fmtVND(req)} — số ${nums[v.id]}`);
       onDone?.(nums[v.id]);
       onClose();
@@ -171,7 +171,7 @@ export function ApproveVoucherModal({ voucher: v, onClose, onDone }) {
 
         {after !== null && (eff.out > 0 || eff.in > 0) && (
           <div className={cx('flex items-center justify-between rounded-xl px-4 py-2.5 text-sm', after < 0 ? 'bg-rose-50 text-rose-700' : 'bg-slate-50 text-slate-600')}>
-            <span>{after < 0 ? 'Thiếu tiền (mặt + gửi) sau khi kết chuyển' : 'Tiền (mặt + gửi) còn sau khi kết chuyển'}</span>
+            <span>{after < 0 ? 'Thiếu tiền (mặt + gửi) sau khi chốt sổ' : 'Tiền (mặt + gửi) còn sau khi chốt sổ'}</span>
             <Money value={Math.abs(after)} className="font-semibold" />
           </div>
         )}

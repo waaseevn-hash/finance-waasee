@@ -85,7 +85,7 @@ export const KIND = {
   },
 };
 
-export const RAW_KEYS = ['id', 'partnerName', 'description', 'total', 'paid', 'openingPaid', 'dueDate', 'certainty', 'priority', 'note', 'supplierId', '_auditId'];
+export const RAW_KEYS = ['id', 'partnerName', 'description', 'total', 'paid', 'openingPaid', 'dueDate', 'certainty', 'priority', 'note', 'supplierId', 'holdUntil', 'holdNote', '_auditId'];
 export const raw = (r) => Object.fromEntries(RAW_KEYS.filter((k) => r[k] !== undefined).map((k) => [k, r[k]]));
 
 /* ------------------------ Thêm / sửa công nợ ------------------------ */

@@ -4,7 +4,7 @@
  * "Két công ty" (id MAIN) luôn có; phiếu không ghi holderId được tính vào két.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from './firebase.js';
 import { AuditedBatch, C } from './db.js';
 import { MAIN_HOLDER } from './calc.js';
@@ -81,4 +81,45 @@ export async function saveHolders(actor, list, raw, summary) {
   if (raw) b.update(C.settings, 'cashHolders', { list: clean }, { list: raw.list || [] }, summary);
   else b.create(C.settings, { list: clean }, summary, { id: 'cashHolders' });
   await b.commit();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Danh sách tài khoản thanh toán của công ty cho Kế toán               */
+/*  settings/payAccounts = { list: [{ id, name, accountNo, accountName }] }                */
+/*  Bản sao (không có số dư, hạn mức) của bộ sưu tập banks — app của Chủ DN / Đồng quản trị */
+/*  tự cập nhật; Kế toán dùng để chọn tài khoản khi chốt sổ khoản chuyển khoản.           */
+/* ------------------------------------------------------------------ */
+const payRef = () => doc(db, C.settings, 'payAccounts');
+const toPayList = (banks = []) =>
+  banks
+    .map((b) => ({ id: b.id, name: String(b.name || ''), accountNo: String(b.accountNo || ''), accountName: String(b.accountName || '') }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+
+export function usePayAccounts(enabled = true) {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    if (!enabled || !db) return undefined;
+    return onSnapshot(
+      payRef(),
+      (s) => setList(s.exists() && Array.isArray(s.data().list) ? s.data().list : []),
+      () => setList([]),
+    );
+  }, [enabled]);
+  return list;
+}
+
+/** Quản lý: giữ settings/payAccounts khớp với danh sách ngân hàng (gọi khi banks thay đổi) */
+export function usePayAccountsSync(banks, enabled) {
+  const current = usePayAccounts(enabled);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!enabled || !db) return undefined;
+    return onSnapshot(payRef(), () => setLoaded(true), () => setLoaded(false));
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled || !loaded || !banks) return;
+    const want = toPayList(banks);
+    if (JSON.stringify(want) === JSON.stringify(current)) return;
+    setDoc(payRef(), { list: want, updatedAt: serverTimestamp() }).catch(() => {});
+  }, [enabled, loaded, banks, current]);
 }

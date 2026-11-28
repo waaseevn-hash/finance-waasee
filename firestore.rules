@@ -9,17 +9,19 @@ rules_version = '2';
 //       OWNER    : toàn quyền + quản lý thành viên + xem nhật ký
 //       CO_OWNER : toàn quyền dòng tiền, duyệt chi, quản lý thành viên
 //                  (trừ tài khoản OWNER), xem nhật ký
-//       STAFF    : CHỈ công nợ phải thu / phải trả (thêm, sửa, xóa), danh bạ NCC,
-//                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt
+//       STAFF    : công nợ phải thu / phải trả (thêm, sửa, xóa), danh bạ NCC,
+//                  ghi "đã chuyển tiền" cho lệnh chi đã duyệt, chi khoản đã duyệt
+//                  và chốt sổ (không đọc được sổ quỹ, số dư tiền gửi, vay)
 //  3. Nhật ký bắt buộc: mọi thay đổi số liệu phải kèm 1 dòng
 //     audit_logs tạo CÙNG LÚC, đúng tài liệu, đúng hành động, đúng
 //     người. Nhật ký không ai sửa / xóa được. Các thao tác hàng loạt
-//     (duyệt nhiều chứng từ, kết chuyển, hủy kết chuyển) dùng 1 dòng
+//     (duyệt nhiều chứng từ, chốt sổ, hủy chốt sổ) dùng 1 dòng
 //     nhật ký 'BATCH' liệt kê toàn bộ đường dẫn tài liệu bị ghi.
-//  4. Chứng từ thu chi nội bộ: mọi vai trò lập được; STAFF chỉ thấy
-//     chứng từ của mình; chỉ OWNER / CO_OWNER duyệt, từ chối, kết
-//     chuyển; chỉ OWNER hủy kết chuyển (đảo bút toán). Bút toán sổ quỹ
-//     sinh từ chứng từ bị khóa, không sửa / xóa trực tiếp được.
+//  4. Chứng từ thu chi nội bộ: mọi vai trò lập được; STAFF thấy chứng
+//     từ của mình + khoản đã duyệt / đã chốt sổ; chỉ OWNER / CO_OWNER
+//     duyệt, từ chối; STAFF báo "đã chi" và chốt sổ (kết chuyển);
+//     chỉ OWNER hủy chốt sổ (đảo bút toán). Bút toán sổ quỹ sinh từ
+//     chứng từ bị khóa, không sửa / xóa trực tiếp được.
 //  5. Mặc định: TỪ CHỐI mọi đường dẫn không khai báo bên dưới.
 // =====================================================================
 
@@ -264,6 +266,13 @@ service cloud.firestore {
       allow read: if isManager();
       allow create: if isManager() && validCash(request.resource.data) && createdByMe()
         && audited('cash_entries/' + id, 'CREATE');
+      // Kế toán chốt sổ: chỉ tạo bút toán gắn chứng từ, cùng lúc với đợt chốt sổ mới (không đọc / sửa / xóa sổ quỹ)
+      allow create: if isStaffOrAbove() && validCash(request.resource.data) && createdByMe()
+        && request.resource.data.get('voucherId', '') != ''
+        && request.resource.data.get('postingBatchId', '') != ''
+        && !exists(batchPath(request.resource.data.postingBatchId))
+        && existsAfter(batchPath(request.resource.data.postingBatchId))
+        && audited('cash_entries/' + id, 'CREATE');
       allow update: if isManager() && validCash(request.resource.data) && keepsCreator()
         && resource.data.get('voucherId', '') == ''
         && request.resource.data.get('voucherId', '') == ''
@@ -277,6 +286,19 @@ service cloud.firestore {
       allow create: if isManager() && validBank(request.resource.data) && createdByMe()
         && audited('banks/' + id, 'CREATE');
       allow update: if isManager() && validBank(request.resource.data) && keepsCreator()
+        && audited('banks/' + id, 'UPDATE');
+      // Kế toán chốt sổ khoản chuyển khoản: không đọc được số dư, chỉ cộng / trừ đúng
+      // (tiền vào − tiền ra) của đợt chốt sổ tạo trong cùng giao dịch; số dư không được âm
+      allow update: if isStaffOrAbove()
+        && changed().hasOnly(['depositBalance', 'lastBatchId', 'updatedBy', 'updatedAt', '_auditId'])
+        && request.resource.data.lastBatchId is string
+        && !exists(batchPath(request.resource.data.lastBatchId))
+        && existsAfter(batchPath(request.resource.data.lastBatchId))
+        && getAfter(batchPath(request.resource.data.lastBatchId)).data.payBank.id == id
+        && request.resource.data.depositBalance == resource.data.depositBalance
+             + getAfter(batchPath(request.resource.data.lastBatchId)).data.bankInTotal
+             - getAfter(batchPath(request.resource.data.lastBatchId)).data.bankTotal
+        && nonNeg(request.resource.data.depositBalance)
         && audited('banks/' + id, 'UPDATE');
       allow delete: if isManager() && auditedDelete('banks', id);
     }
@@ -347,7 +369,9 @@ service cloud.firestore {
     //  CHỨNG TỪ THU CHI NỘI BỘ (TT 200): GĐNTU, GĐNTT, Phiếu thu, Phiếu chi
     // =================================================================
     match /internal_vouchers/{id} {
-      allow read: if isManager() || (isStaffOrAbove() && resource.data.requestedBy == myEmail());
+      // Kế toán: chứng từ mình lập + mọi khoản Sếp đã duyệt / đã chốt sổ (để chi tiền, chốt sổ, in lại)
+      allow read: if isManager()
+        || (isStaffOrAbove() && (resource.data.requestedBy == myEmail() || resource.data.status in ['APPROVED', 'POSTED']));
 
       // Lập mới: mọi vai trò (Nháp / Chờ duyệt). Quản lý được lập & duyệt luôn (đã cấp số).
       allow create: if isStaffOrAbove() && createdByMe()
@@ -363,8 +387,8 @@ service cloud.firestore {
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'CREATE');
 
-      // Phiếu thu / phiếu chi sinh tự động trong đợt kết chuyển
-      allow create: if isManager() && createdByMe()
+      // Phiếu thu / phiếu chi sinh tự động trong đợt chốt sổ (kế toán hoặc quản lý chốt sổ)
+      allow create: if isStaffOrAbove() && createdByMe()
         && request.resource.data.auto == true
         && request.resource.data.status == 'POSTED'
         && request.resource.data.no.size() > 0
@@ -403,8 +427,22 @@ service cloud.firestore {
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'UPDATE');
 
-      // Kết chuyển: Đã duyệt -> Đã kết chuyển (một lần duy nhất, gắn với đợt kết chuyển tạo cùng lúc)
-      allow update: if isManager()
+      // Kế toán báo "Đã chi tiền" (hoặc bỏ đánh dấu) cho khoản đã duyệt, chưa chốt sổ.
+      // Không đổi được số tiền, số Sếp duyệt hay trạng thái.
+      allow update: if isStaffOrAbove()
+        && resource.data.auto == false
+        && resource.data.status == 'APPROVED'
+        && request.resource.data.status == 'APPROVED'
+        && changed().hasOnly(['paidAt', 'paidBy', 'paidByName', 'paidNote', 'payMethod', 'payeeName', 'payeeAccount', 'payeeBank', 'payeeBranch', 'updatedBy', 'updatedAt', '_auditId'])
+        && (request.resource.data.paidAt == ''
+            || (isDate(request.resource.data.paidAt) && request.resource.data.paidBy == myEmail()))
+        && shortText(request.resource.data.get('paidNote', ''), 300)
+        && shortText(request.resource.data.get('paidByName', ''), 200)
+        && validVoucher(request.resource.data)
+        && audited('internal_vouchers/' + id, 'UPDATE');
+
+      // Chốt sổ: Đã duyệt -> Đã chốt sổ (một lần duy nhất, gắn với đợt chốt sổ tạo cùng lúc) — kế toán hoặc quản lý
+      allow update: if isStaffOrAbove()
         && resource.data.auto == false
         && resource.data.status == 'APPROVED'
         && request.resource.data.status == 'POSTED'
@@ -415,8 +453,8 @@ service cloud.firestore {
         && validVoucher(request.resource.data)
         && audited('internal_vouchers/' + id, 'UPDATE');
 
-      // Quyết toán tạm ứng: chỉ thay đổi số đã quyết toán của giấy tạm ứng đã kết chuyển
-      allow update: if isManager()
+      // Quyết toán tạm ứng: chỉ thay đổi số đã quyết toán của giấy tạm ứng đã chốt sổ
+      allow update: if isStaffOrAbove()
         && resource.data.type == 'TU'
         && resource.data.status == 'POSTED'
         && request.resource.data.status == 'POSTED'
@@ -451,7 +489,9 @@ service cloud.firestore {
     // Ảnh / file đính kèm chứng từ (nén, lưu trực tiếp trong Firestore)
     match /voucher_files/{id} {
       allow read: if isManager()
-        || (isStaffOrAbove() && (resource.data.createdBy == myEmail() || resource.data.requestedBy == myEmail()));
+        || (isStaffOrAbove() && (resource.data.createdBy == myEmail() || resource.data.requestedBy == myEmail()))
+        || (isStaffOrAbove() && exists(voucherPath(resource.data.voucherId))
+            && get(voucherPath(resource.data.voucherId)).data.status in ['APPROVED', 'POSTED']);
       allow create: if isStaffOrAbove() && createdByMe()
         && request.resource.data.voucherId is string
         && request.resource.data.requestedBy is string
@@ -467,8 +507,8 @@ service cloud.firestore {
 
     // Đợt kết chuyển: bất biến, chỉ Chủ DN ghi nhận chứng từ bị hủy kết chuyển
     match /posting_batches/{id} {
-      allow read: if isManager();
-      allow create: if isManager() && createdByMe()
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && createdByMe()
         && request.resource.data.code is string
         && request.resource.data.voucherIds is list
         && audited('posting_batches/' + id, 'CREATE');
@@ -480,9 +520,9 @@ service cloud.firestore {
 
     // Bộ đếm số chứng từ / số đợt: chỉ tăng, không giảm, không xóa
     match /counters/{key} {
-      allow read: if isManager();
-      allow create: if isManager() && request.resource.data.value is int && request.resource.data.value >= 1;
-      allow update: if isManager() && request.resource.data.value is int && request.resource.data.value > resource.data.value;
+      allow read: if isStaffOrAbove();
+      allow create: if isStaffOrAbove() && request.resource.data.value is int && request.resource.data.value >= 1;
+      allow update: if isStaffOrAbove() && request.resource.data.value is int && request.resource.data.value > resource.data.value;
       allow delete: if false;
     }
 
@@ -501,10 +541,15 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if isOwner() && auditedDelete('plan_snapshots', id);
     }
-    // Cài đặt: tên doanh nghiệp (mọi thành viên đọc, Chủ DN sửa); mẫu chi cố định (OWNER / CO_OWNER)
+    // Cài đặt:
+    //  - company: tên doanh nghiệp (mọi thành viên đọc)
+    //  - notify: thông báo đẩy Telegram (mọi thành viên đọc để gửi tin khi thao tác; chỉ Chủ DN sửa)
+    //  - payAccounts: tên + số tài khoản thanh toán của công ty, không có số dư (kế toán chọn khi chốt sổ)
+    //  - còn lại (người giữ tiền, mẫu chi cố định…): OWNER / CO_OWNER
     match /settings/{key} {
-      allow read: if (key == 'company' && isMember()) || isManager();
-      allow write: if isManager();
+      allow read: if (key in ['company', 'notify', 'payAccounts'] && isMember()) || isManager();
+      allow write: if isManager() && key != 'notify';
+      allow write: if isOwner() && key == 'notify';
     }
 
     // =================================================================

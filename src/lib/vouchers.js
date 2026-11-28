@@ -39,8 +39,8 @@ export const VTYPE = {
 export const VSTATUS = {
   DRAFT: { label: 'Nháp', tone: 'slate' },
   PENDING: { label: 'Chờ duyệt', tone: 'amber' },
-  APPROVED: { label: 'Đã duyệt · chờ kết xuất', tone: 'blue' },
-  POSTED: { label: 'Đã kết chuyển', tone: 'green' },
+  APPROVED: { label: 'Đã duyệt · chờ chi & chốt sổ', tone: 'blue' },
+  POSTED: { label: 'Đã chốt sổ', tone: 'green' },
   REJECTED: { label: 'Từ chối', tone: 'red' },
   CANCELLED: { label: 'Đã hủy', tone: 'slate' },
 };
@@ -659,4 +659,42 @@ export function voucherStats(vouchers = [], month) {
     advancePeople: new Set(adv.map((v) => v.person)).size,
     rejectedCount: own.filter((v) => v.status === 'REJECTED').length,
   };
+}
+
+/** Tổng hợp lại từ chứng từ hiện còn hiệu lực của một đợt (dùng khi in lại) */
+export function batchFromDocs(batch, docs) {
+  const lines = ledgerLines(docs).filter((l) => !l.info);
+  const receipts = docs.filter((d) => d.type === 'PT');
+  const payments = docs.filter((d) => d.type === 'PC');
+  const rt = lines.filter((l) => l.debit === '1111').reduce((s, l) => s + l.amount, 0);
+  const pt = lines.filter((l) => l.credit === '1111').reduce((s, l) => s + l.amount, 0);
+  const bi = lines.filter((l) => l.debit === '1121').reduce((s, l) => s + l.amount, 0);
+  const bo = lines.filter((l) => l.credit === '1121').reduce((s, l) => s + l.amount, 0);
+  return {
+    ...batch,
+    receiptsCount: receipts.length,
+    receiptsTotal: rt,
+    paymentsCount: payments.length,
+    paymentsTotal: pt,
+    net: rt - pt,
+    bankInTotal: bi,
+    bankTotal: bo,
+    bankNet: bi - bo,
+  };
+}
+
+/** Chứng từ còn hiệu lực của một đợt chốt sổ (gốc + phiếu sinh tự động), theo thứ tự in */
+export function docsOfBatch(b, all = []) {
+  const byId = new Map(all.map((v) => [v.id, v]));
+  const out = [];
+  for (const id of b.voucherIds || []) {
+    const v = byId.get(id);
+    if (!v || v.status !== 'POSTED' || v.postingBatchId !== b.id) continue;
+    out.push(v);
+    for (const g of v.generatedIds || []) {
+      const gv = byId.get(g);
+      if (gv && gv.status === 'POSTED') out.push(gv);
+    }
+  }
+  return out;
 }

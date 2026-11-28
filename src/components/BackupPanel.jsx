@@ -12,7 +12,7 @@ const EXTRA_LABEL = {
   plans: 'Bản nháp kế hoạch',
   internal_vouchers: 'Chứng từ nội bộ',
   voucher_files: 'Ảnh chứng từ',
-  posting_batches: 'Đợt kết chuyển',
+  posting_batches: 'Đợt chốt sổ',
   counters: 'Bộ đếm số phiếu',
   audit_logs: 'Nhật ký',
   audit_archive: 'Nhật ký cũ (claude.ai)',

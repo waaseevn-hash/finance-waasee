@@ -4,6 +4,7 @@
  */
 import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, serverTimestamp, where } from 'firebase/firestore';
 import { db } from './firebase.js';
+import { notifyEvent } from './notify.js';
 import { AuditedBatch, C, newId, runAuditedTx } from './db.js';
 import { todayISO } from './dates.js';
 import {
@@ -16,6 +17,8 @@ import {
   countersNeeded,
   requestedAmount,
   bankFlow,
+  isBank,
+  itemsTotal,
   settlement,
   voucherAmount,
 } from './vouchers.js';
@@ -125,6 +128,7 @@ export async function saveVoucher({ actor, id, existing, form, mode }) {
       b.update(C.vouchers, existing.id, patch, existing, `${status === 'PENDING' ? 'Gửi duyệt' : 'Sửa nháp'} ${describe({ ...existing, ...content })}`);
     }
     await b.commit();
+    if (status === 'PENDING') notifyProposed({ ...(existing || {}), ...content }, actor);
     return existing?.id || id;
   }
 
@@ -137,7 +141,7 @@ export async function saveVoucher({ actor, id, existing, form, mode }) {
       const s = await tx.get(doc(db, C.vouchers, existing.id));
       if (!s.exists()) throw new Error('Chứng từ không còn tồn tại');
       cur = { id: s.id, ...s.data() };
-      if (!['DRAFT', 'PENDING', 'REJECTED'].includes(cur.status)) throw new Error('Chứng từ đã được duyệt hoặc kết chuyển bởi người khác');
+      if (!['DRAFT', 'PENDING', 'REJECTED'].includes(cur.status)) throw new Error('Chứng từ đã được duyệt hoặc chốt sổ bởi người khác');
     }
     const counters = { [key]: cSnap.exists() ? cSnap.data().value || 0 : 0 };
     const vid = existing?.id || id;
@@ -174,7 +178,33 @@ export async function saveVoucher({ actor, id, existing, form, mode }) {
  * Duyệt một hoặc nhiều chứng từ đang chờ duyệt (cấp số).
  * partial: { [id]: { amount, note } } — duyệt một phần (số nhỏ hơn số đề nghị); không có thì duyệt toàn bộ.
  */
-export function approveVouchers({ actor, ids, partial = {} }) {
+export async function approveVouchers(args) {
+  const nums = await approveVouchersTx(args);
+  try {
+    const list = (args.list || []).filter((v) => args.ids.includes(v.id));
+    if (list.length) {
+      const total = list.reduce((t, v) => {
+        const p = args.partial?.[v.id];
+        return t + (p && Number(p.amount) > 0 && Number(p.amount) < requestedAmount(v) ? Math.round(Number(p.amount)) : requestedAmount(v));
+      }, 0);
+      const one = list[0];
+      notifyEvent('APPROVED', {
+        who: list.length === 1 ? one.person : `${list.length} đề xuất`,
+        what: list.length === 1 ? `${nums[one.id] || ''} ${one.reason || ''}`.trim() : list.map((v) => nums[v.id]).join(', '),
+        amount: total,
+        requested: list.length === 1 ? requestedAmount(one) : undefined,
+        method: list.length === 1 ? (isBank(one) ? 'Chuyển khoản' : 'Tiền mặt') : '',
+        by: args.actor.name || args.actor.email,
+        count: list.length,
+      });
+    }
+  } catch {
+    /* thông báo không được làm hỏng thao tác duyệt */
+  }
+  return nums;
+}
+
+function approveVouchersTx({ actor, ids, partial = {} }) {
   return runAuditedTx(actor, { summary: '' }, async (tx, audit) => {
     const snaps = await Promise.all(ids.map((id) => tx.get(doc(db, C.vouchers, id))));
     const list = snaps.map((s) => {
@@ -224,6 +254,47 @@ export async function rejectVoucher({ actor, v, reason, toPending = false }) {
   if (v.approvedAmount) Object.assign(patch, { approvedAmount: 0, approvalNote: '' });
   b.update(C.vouchers, v.id, patch, v, `${toPending ? 'Hủy duyệt' : `Từ chối (${patch.rejectReason})`} ${describe(v)}`);
   await b.commit();
+  if (!toPending) notifyEvent('REJECTED', { who: v.person, what: `${VTYPE[v.type]?.short || ''} — ${v.reason || ''}`, amount: requestedAmount(v), reason: patch.rejectReason, by: actor.name || actor.email });
+}
+
+/** Báo Sếp có đề xuất mới (gọi sau khi gửi duyệt) */
+export function notifyProposed(v, actor) {
+  notifyEvent('PROPOSED', {
+    who: v.person,
+    what: `${VTYPE[v.type]?.short || ''} — ${v.reason || ''}`,
+    amount: v.type === 'TT' ? itemsTotal(v.items) : Math.round(Number(v.amount) || 0),
+    method: v.payMethod === 'BANK' ? 'Chuyển khoản' : 'Tiền mặt',
+    by: actor?.name || actor?.email,
+  });
+}
+
+/**
+ * Kế toán báo "Đã chi tiền" cho khoản Sếp đã duyệt (chưa chốt sổ).
+ * Ghi ngày chi, người chi, hình thức thực chi (tiền mặt / chuyển khoản, tài khoản người nhận). Không đổi số tiền.
+ * paid = null: bỏ đánh dấu đã chi.
+ */
+export async function markVoucherPaid({ actor, v, paid }) {
+  if (v.status !== 'APPROVED') throw new Error('Chỉ báo đã chi cho khoản đã duyệt, chưa chốt sổ');
+  const b = new AuditedBatch(actor);
+  const patch = paid
+    ? {
+        paidAt: paid.paidAt || todayISO(),
+        paidBy: actor.email,
+        paidByName: actor.name || actor.email,
+        paidNote: String(paid.note || '').trim().slice(0, 300),
+        payMethod: paid.payMethod === 'BANK' ? 'BANK' : 'CASH',
+        ...(paid.payMethod === 'BANK' && v.type !== 'PT'
+          ? {
+              payeeName: String(paid.payeeName ?? v.payeeName ?? '').trim().slice(0, 200),
+              payeeAccount: String(paid.payeeAccount ?? v.payeeAccount ?? '').replace(/\s+/g, '').slice(0, 40),
+              payeeBank: String(paid.payeeBank ?? v.payeeBank ?? '').trim().slice(0, 200),
+              payeeBranch: String(paid.payeeBranch ?? v.payeeBranch ?? '').trim().slice(0, 200),
+            }
+          : {}),
+      }
+    : { paidAt: '', paidBy: '', paidByName: '', paidNote: '' };
+  b.update(C.vouchers, v.id, patch, v, paid ? `Đã chi tiền ${describe(v)} — ${patch.payMethod === 'BANK' ? 'chuyển khoản' : 'tiền mặt'}` : `Bỏ đánh dấu đã chi ${describe(v)}`);
+  await b.commit();
 }
 
 /** Xóa chứng từ chưa cấp số (kèm ảnh đính kèm) */
@@ -244,9 +315,9 @@ export async function deleteVoucher({ actor, v }) {
  * Kết chuyển một đợt.
  * payBank: tài khoản ngân hàng của công ty dùng cho các khoản chuyển khoản { id, name, accountNo, accountName }
  */
-export async function postVouchers({ actor, ids, postDate, payBank = null }) {
+export async function postVouchers({ actor, ids, postDate, payBank = null, canReadBanks = true }) {
   if (!ids.length) throw new Error('Chưa chọn chứng từ nào');
-  if (ids.length > 80) throw new Error('Mỗi đợt kết chuyển tối đa 80 chứng từ. Chia thành nhiều đợt.');
+  if (ids.length > 80) throw new Error('Mỗi đợt chốt sổ tối đa 80 chứng từ. Chia thành nhiều đợt.');
   const batchId = newId(C.batches);
   return runAuditedTx(actor, { summary: '', primaryPath: `${C.batches}/${batchId}` }, async (tx, audit) => {
     const snaps = await Promise.all(ids.map((id) => tx.get(doc(db, C.vouchers, id))));
@@ -256,7 +327,7 @@ export async function postVouchers({ actor, ids, postDate, payBank = null }) {
     });
     const notReady = vouchers.filter((v) => v.status !== 'APPROVED' || v.auto);
     if (notReady.length)
-      throw new Error(`Không kết chuyển được: ${notReady.map((v) => v.no || v.person).join(', ')} không còn ở trạng thái "Đã duyệt" (có thể vừa được người khác kết chuyển). Tải lại danh sách.`);
+      throw new Error(`Không chốt sổ được: ${notReady.map((v) => v.no || v.person).join(', ')} không còn ở trạng thái "Đã duyệt" (có thể vừa được người khác chốt sổ). Tải lại danh sách.`);
     const advIds = [...new Set(vouchers.filter((v) => v.type === 'TT' && v.advanceId && settlement(v).B > 0).map((v) => v.advanceId))];
     const advSnaps = await Promise.all(advIds.map((id) => tx.get(doc(db, C.vouchers, id))));
     const advances = {};
@@ -272,7 +343,12 @@ export async function postVouchers({ actor, ids, postDate, payBank = null }) {
     // Khoản chuyển khoản: cập nhật số dư tiền gửi của tài khoản ngân hàng được chọn (đọc trước khi ghi)
     let bankBefore = null;
     let bankAfter = null;
-    if (plan.batch.bankTotal || plan.batch.bankInTotal) {
+    let bankDelta = 0;
+    if ((plan.batch.bankTotal || plan.batch.bankInTotal) && !canReadBanks) {
+      // Kế toán không xem số dư tiền gửi: cộng / trừ thẳng (luật bảo mật chặn nếu số dư âm)
+      if (!payBank?.id) throw new Error('Đợt này có khoản chuyển khoản: chọn tài khoản ngân hàng của công ty để chi / nhận tiền.');
+      bankDelta = plan.batch.bankInTotal - plan.batch.bankTotal;
+    } else if (plan.batch.bankTotal || plan.batch.bankInTotal) {
       if (!payBank?.id) throw new Error('Đợt này có khoản chuyển khoản: chọn tài khoản ngân hàng của công ty để chi / nhận tiền.');
       const bsnap = await tx.get(doc(db, C.banks, payBank.id));
       if (!bsnap.exists()) throw new Error('Không tìm thấy tài khoản ngân hàng đã chọn');
@@ -284,7 +360,9 @@ export async function postVouchers({ actor, ids, postDate, payBank = null }) {
 
     const bankInfo = bankBefore
       ? { payBank: { id: bankBefore.id, name: bankBefore.name || '', accountNo: bankBefore.accountNo || '', accountName: bankBefore.accountName || '' }, bankBalanceBefore: Math.round(Number(bankBefore.depositBalance) || 0), bankBalanceAfter: bankAfter }
-      : {};
+      : bankDelta
+        ? { payBank: { id: payBank.id, name: payBank.name || '', accountNo: payBank.accountNo || '', accountName: payBank.accountName || '' } }
+        : {};
     audit.create(C.batches, { ...plan.batch, ...bankInfo, posterName: actor.name || actor.email }, { id: batchId });
     for (const g of plan.generated) {
       const src = byId[g.data.sourceId];
@@ -314,10 +392,12 @@ export async function postVouchers({ actor, ids, postDate, payBank = null }) {
     for (const c of plan.cashEntries) audit.create(C.cash, c.data, { id: c.id });
     for (const [id, a] of Object.entries(plan.advanceUpdates)) audit.update(C.vouchers, id, { settledAmount: a.settledAmount }, a.before);
     if (bankBefore) audit.update(C.banks, bankBefore.id, { depositBalance: bankAfter }, bankBefore);
+    // lastBatchId: luật bảo mật đối chiếu số cộng / trừ với đợt chốt sổ tạo trong cùng giao dịch
+    if (bankDelta) audit.adjust(C.banks, payBank.id, 'depositBalance', bankDelta, { lastBatchId: batchId });
     for (const k of keys) {
       if (plan.counters[k] !== counters[k]) tx.set(doc(db, C.counters, k), { value: plan.counters[k], updatedBy: actor.email, updatedAt: serverTimestamp() });
     }
-    audit.summary = `Kết chuyển ${plan.batchCode}: ${vouchers.length} chứng từ — thu ${fmtVND(plan.batch.receiptsTotal)}, chi ${fmtVND(plan.batch.paymentsTotal)}${plan.batch.bankCount ? `, chuyển khoản ${fmtVND(plan.batch.bankTotal)}` : ''}`;
+    audit.summary = `Chốt sổ ${plan.batchCode}: ${vouchers.length} chứng từ — thu ${fmtVND(plan.batch.receiptsTotal)}, chi ${fmtVND(plan.batch.paymentsTotal)}${plan.batch.bankCount ? `, chuyển khoản ${fmtVND(plan.batch.bankTotal)}` : ''}`;
     audit.logData = { code: plan.batchCode, voucherNos: plan.batch.docNos, receiptsTotal: plan.batch.receiptsTotal, paymentsTotal: plan.batch.paymentsTotal, net: plan.batch.net };
     return { batchId, batch: { id: batchId, ...plan.batch, ...bankInfo, posterName: actor.name || actor.email }, docs: plan.docs };
   });
@@ -362,7 +442,7 @@ export async function reverseVoucher({ actor, id, reason }) {
       const reversedIds = [...new Set([...(b.reversedIds || []), v.id])];
       audit.update(C.batches, b.id, { reversedIds, reversedCount: reversedIds.length, status: reversedIds.length >= (b.voucherIds || []).length ? 'REVERSED' : 'PARTIAL' }, b);
     }
-    audit.summary = `Hủy kết chuyển ${describe(v)} — đảo ${plan.reversals.length} bút toán sổ quỹ${reason ? `: ${reason}` : ''}`;
+    audit.summary = `Hủy chốt sổ ${describe(v)} — đảo ${plan.reversals.length} bút toán sổ quỹ${reason ? `: ${reason}` : ''}`;
     audit.logData = { voucherNo: v.no, reason, reversals: plan.reversals.map((r) => r.id) };
     return plan;
   });

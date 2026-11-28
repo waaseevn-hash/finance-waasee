@@ -496,7 +496,7 @@ function ApprovalsCard({ cash, deposits, className = '' }) {
   const approve = async (ids, key) => {
     setBusy(key);
     try {
-      const nums = await approveVouchers({ actor, ids });
+      const nums = await approveVouchers({ actor, ids, list: data.vouchers || [] });
       const list = Object.values(nums || {});
       toast.success(ids.length === 1 && list[0] ? `Đã duyệt, số ${list[0]}` : `Đã duyệt ${list.length || ids.length} chứng từ`);
     } catch (ex) {
@@ -536,7 +536,7 @@ function ApprovalsCard({ cash, deposits, className = '' }) {
             tone={need ? 'text-vermilion-600' : 'text-slate-400'}
             sub={
               <span className="hidden sm:inline">
-                chờ duyệt <Money value={v.pendingOut} /> · chờ kết chuyển <Money value={v.approvedOut} />
+                chờ duyệt <Money value={v.pendingOut} /> · chờ chốt sổ <Money value={v.approvedOut} />
                 {v.bankOut > 0 && (
                   <>
                     {' '}
@@ -609,7 +609,7 @@ function ApprovalsCard({ cash, deposits, className = '' }) {
             {v.approved.length > 0 && (
               <a href="#vouchers-post" className="mx-4 mb-3 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg bg-sapphire-50 px-3 py-2 text-xs text-sapphire-800 hover:bg-sapphire-100 sm:mx-5">
                 <span className="flex-1">
-                  Đã duyệt, chờ kết chuyển: <b>{v.approved.length} chứng từ</b>
+                  Đã duyệt, chờ chốt sổ: <b>{v.approved.length} chứng từ</b>
                   {v.approvedOut > 0 && (
                     <>
                       {' '}
@@ -617,7 +617,7 @@ function ApprovalsCard({ cash, deposits, className = '' }) {
                     </>
                   )}
                 </span>
-                <span className="font-semibold underline">Kết chuyển</span>
+                <span className="font-semibold underline">Chốt sổ</span>
               </a>
             )}
           </section>

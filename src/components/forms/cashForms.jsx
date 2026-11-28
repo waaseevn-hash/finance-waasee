@@ -27,7 +27,7 @@ function LockedEntry({ entry, onClose }) {
       open
       onClose={onClose}
       title={`Bút toán từ chứng từ ${entry.voucherNo || ''}`}
-      subtitle={entry.reversalOf ? 'Bút toán đảo (hủy kết chuyển)' : 'Ghi sổ tự động khi kết chuyển'}
+      subtitle={entry.reversalOf ? 'Bút toán đảo (hủy chốt sổ)' : 'Ghi sổ tự động khi chốt sổ'}
       footer={
         <>
           <Button onClick={onClose}>Đóng</Button>
@@ -60,7 +60,7 @@ function LockedEntry({ entry, onClose }) {
         </div>
       </dl>
       <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-        Bút toán này đã khóa vì sinh từ chứng từ đã kết chuyển. Muốn điều chỉnh, Chủ doanh nghiệp mở chứng từ và chọn “Hủy kết chuyển” — hệ thống ghi bút toán đảo, không xóa lịch sử.
+        Bút toán này đã khóa vì sinh từ chứng từ đã chốt sổ. Muốn điều chỉnh, Chủ doanh nghiệp mở chứng từ và chọn “Hủy chốt sổ” — hệ thống ghi bút toán đảo, không xóa lịch sử.
       </p>
     </Modal>
   );

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   BadgeCheck,
   ChartColumnBig,
@@ -11,7 +11,7 @@ import {
   Radar,
   ReceiptText,
   Siren,
-  Vault, Stamp } from 'lucide-react';
+  Vault, Stamp, Wallet, UserRound } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { apSummary, arSummary, bankSummary, buildRadar, cashBalance, cashMonthStats } from '../lib/calc.js';
@@ -22,7 +22,10 @@ import { openPayOrders } from '../lib/approvals.js';
 import { Money } from '../components/Money.jsx';
 import { useQuick } from '../components/QuickPanels.jsx';
 import { BankUsageBars, CashFlowChart } from '../components/Charts.jsx';
-import { Card, CardHeader, EmptyState, PageHeader, Spinner, StatTile, cx } from '../components/ui.jsx';
+import { Card, CardHeader, Drawer, EmptyState, PageHeader, Spinner, StatTile, cx } from '../components/ui.jsx';
+import { QuickApprovalList, useMoneyNow, usePendingApprovals } from '../components/NotificationCenter.jsx';
+import { MAIN_HOLDER, holderBalances } from '../lib/calc.js';
+import { useCashHolders } from '../lib/holders.js';
 
 const KIND_ICON = { LOAN: Landmark, AR: CircleArrowDown, AP: CircleArrowUp };
 const KIND_LABEL = { LOAN: 'Đáo hạn vay', AR: 'Phải thu', AP: 'Phải trả P1' };
@@ -35,6 +38,10 @@ export default function Dashboard() {
   const today = todayISO();
   const thisMonth = currentMonth();
   const orders = useMemo(() => openPayOrders(data.approvals, data.ap, data.suppliers), [data.approvals, data.ap, data.suppliers]);
+  const [moneyOpen, setMoneyOpen] = useState(false);
+  const pending = usePendingApprovals();
+  const money = useMoneyNow();
+  const approver = can(role, 'approveVouchers');
 
   const m = useMemo(() => {
     const cash = cashBalance(data.cash);
@@ -62,10 +69,10 @@ export default function Dashboard() {
   }
 
   const redCount = m.radar.filter((a) => a.level === 'red').length;
+  // Chủ DN xem 1 con số tiền đang có; bấm vào mới tách tiền mặt / tiền gửi
   const parts = [
-    { key: 'cash', label: 'Tiền mặt trong két', value: m.cash, color: '#34d399', icon: Vault, panel: 'cash' },
-    { key: 'dep', label: 'Tiền gửi tài khoản', value: m.bank.totals.deposit, color: '#5eead4', icon: PiggyBank, panel: 'deposits' },
-    { key: 'credit', label: 'Còn được vay ngân hàng', value: m.bank.totals.available, color: '#93c5fd', icon: Landmark, panel: 'credit' },
+    { key: 'money', label: 'Tổng tiền đang có (khả dụng chi)', value: m.cash + m.bank.totals.deposit, color: '#34d399', icon: Wallet, open: () => setMoneyOpen(true), hint: 'Bấm để xem chi tiết' },
+    { key: 'credit', label: 'Còn được vay ngân hàng', value: m.bank.totals.available, color: '#93c5fd', icon: Landmark, open: () => quick.open('credit'), hint: 'Bấm để vay / tất toán' },
   ];
   const partsTotal = parts.reduce((s, p) => s + Math.max(0, p.value), 0) || 1;
   const arTotal = m.ar.total || 1;
@@ -107,7 +114,7 @@ export default function Dashboard() {
               <p className="mt-1 font-display text-4xl sm:text-5xl font-bold tracking-tight">
                 <Money value={m.liquidity} />
               </p>
-              <p className="mt-2 text-sm text-white/60">Tiền mặt trong két + tiền gửi tài khoản + số tiền còn được vay ngân hàng</p>
+              <p className="mt-2 text-sm text-white/60">Tổng tiền đang có + số tiền còn được vay ngân hàng</p>
             </div>
             <div>
               <div className="flex h-4 w-full gap-[3px] overflow-hidden rounded-full bg-white/10">
@@ -117,26 +124,26 @@ export default function Dashboard() {
                       type="button"
                       key={p.key}
                       title={p.label}
-                      onClick={() => quick.open(p.panel)}
+                      onClick={p.open}
                       className="h-full first:rounded-l-full last:rounded-r-full hover:brightness-110"
                       style={{ width: `${(Math.max(0, p.value) / partsTotal) * 100}%`, background: p.color }}
                     />
                   ) : null,
                 )}
               </div>
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {parts.map((p) => (
                   <button
                     type="button"
                     key={p.key}
-                    onClick={() => quick.open(p.panel)}
+                    onClick={p.open}
                     className="group flex items-start gap-2.5 rounded-2xl bg-white/[0.07] px-3 py-2.5 text-left ring-1 ring-inset ring-white/10 hover:bg-white/[0.12]"
                   >
                     <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: p.color }} />
                     <span className="min-w-0">
                       <span className="block text-xs text-white/65">{p.label}</span>
                       <Money value={p.value} className="block font-display text-[15px] font-semibold" />
-                      <span className="text-[11px] text-white/45 group-hover:text-white/80">Bấm để thêm / bớt</span>
+                      <span className="text-[11px] text-white/45 group-hover:text-white/80">{p.hint}</span>
                     </span>
                   </button>
                 ))}
@@ -170,16 +177,20 @@ export default function Dashboard() {
           <StatTile
             variant="solid"
             tone="jade"
-            icon={Vault}
-            label="Tiền mặt trong két"
-            value={<Money value={m.cash} />}
+            icon={Wallet}
+            label="Tổng tiền đang có (Khả dụng chi)"
+            value={<Money value={m.cash + m.bank.totals.deposit} />}
             sub={
-              <>
-                Tháng này thu <Money value={m.month.inSum} className="font-semibold" /> · chi <Money value={m.month.outSum} className="font-semibold" />
-              </>
+              money.committed.out > 0 ? (
+                <>
+                  Đã duyệt chờ chi <Money value={money.committed.out} className="font-semibold" /> · còn tự do <Money value={money.free} className="font-semibold" />
+                </>
+              ) : (
+                'Tiền mặt và tiền gửi ngân hàng'
+              )
             }
-            action="Thu / chi tiền"
-            onClick={() => quick.open('cash')}
+            action="Xem chi tiết"
+            onClick={() => setMoneyOpen(true)}
           />
         )}
         <StatTile
@@ -211,6 +222,31 @@ export default function Dashboard() {
           onClick={() => quick.open('ap', { filter: 'month' })}
         />
       </div>
+
+      {approver && (
+        <Card className="mt-4">
+          <CardHeader
+            title="Khoản chờ duyệt ngay"
+            subtitle={
+              pending.length ? (
+                <>
+                  {pending.length} khoản · chờ duyệt <Money value={pending.reduce((t, it) => t + it.out - it.inn, 0)} className="font-semibold" /> so với tiền đang có{' '}
+                  <Money value={money.free} className="font-semibold" />
+                </>
+              ) : (
+                'Không có khoản nào chờ duyệt'
+              )
+            }
+            icon={Stamp}
+            iconClass="bg-vermilion-50 text-vermilion-700"
+          />
+          {pending.length > 0 && (
+            <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+              <QuickApprovalList limit={4} compact onMore={() => (window.location.hash = 'approve')} />
+            </div>
+          )}
+        </Card>
+      )}
 
       {treasury && (
         <div className="mt-4 grid gap-4 grid-cols-1 xl:grid-cols-3">
@@ -301,6 +337,91 @@ export default function Dashboard() {
           </div>
         </Card>
       </div>
+      {treasury && <MoneyDrawer open={moneyOpen} onClose={() => setMoneyOpen(false)} quick={quick} />}
     </div>
+  );
+}
+
+/** Chi tiết "Tổng tiền đang có": tiền mặt (két + từng người giữ) và tiền gửi từng ngân hàng */
+function MoneyDrawer({ open, onClose, quick }) {
+  const data = useData();
+  const holders = useCashHolders(open);
+  const money = useMoneyNow();
+  const bal = useMemo(() => holderBalances(data.cash || []), [data.cash]);
+  const rows = holders.all.filter((h) => h.active || (bal[h.id] || 0) !== 0);
+  const go = (fn) => {
+    onClose();
+    fn();
+  };
+  const Line = ({ icon: Icon, label, value, sub, onClick }) => (
+    <li>
+      <button type="button" onClick={onClick} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-600">
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-ink-900">{label}</span>
+          {sub && <span className="block truncate text-xs text-slate-500">{sub}</span>}
+        </span>
+        <Money value={value} className={cx('shrink-0 text-sm font-semibold', value < 0 ? 'text-rose-600' : 'text-ink-900')} />
+      </button>
+    </li>
+  );
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      tone="jade"
+      icon={Wallet}
+      title="Tổng tiền đang có"
+      subtitle="Tiền mặt và tiền gửi ngân hàng — số dùng được để chi"
+      hero={
+        <div>
+          <Money value={money.total} className="block font-display text-3xl font-bold" />
+          {money.committed.out > 0 && (
+            <p className="mt-1 text-sm text-white/80">
+              Đã duyệt chờ chi <Money value={money.committed.out} className="font-semibold" /> → còn tự do <Money value={money.free} className="font-semibold" />
+            </p>
+          )}
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+            <p className="text-sm font-semibold text-ink-900">Tiền mặt</p>
+            <Money value={money.cash} className="text-sm font-bold text-jade-700" />
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {rows.map((h) => (
+              <Line key={h.id} icon={h.id === MAIN_HOLDER ? Vault : UserRound} label={h.id === MAIN_HOLDER ? h.name : `${h.name} đang giữ`} value={bal[h.id] || 0} onClick={() => go(() => (window.location.hash = 'cash'))} />
+            ))}
+          </ul>
+        </section>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+            <p className="text-sm font-semibold text-ink-900">Tiền gửi ngân hàng</p>
+            <Money value={money.deposits} className="text-sm font-bold text-lagoon-700" />
+          </div>
+          {(data.banks || []).length === 0 ? (
+            <p className="px-4 py-3 text-sm text-slate-500">Chưa có tài khoản ngân hàng.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {(data.banks || []).map((b) => (
+                <Line key={b.id} icon={PiggyBank} label={b.name} sub={b.accountNo ? `TK ${b.accountNo}` : ''} value={Number(b.depositBalance) || 0} onClick={() => go(() => quick.open('deposits'))} />
+              ))}
+            </ul>
+          )}
+        </section>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => go(() => quick.open('cash'))} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Thu / chi tiền mặt
+          </button>
+          <button type="button" onClick={() => go(() => quick.open('deposits'))} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Cập nhật số dư tiền gửi
+          </button>
+        </div>
+      </div>
+    </Drawer>
   );
 }

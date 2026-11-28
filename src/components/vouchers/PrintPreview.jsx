@@ -274,7 +274,7 @@ export function PrintPreview({ open, onClose, title = 'Bản in chứng từ', f
             </div>
             <div className="mt-4 space-y-2.5 border-t border-slate-200 pt-3">
               <TextField label="Người lập phiếu (áp cho mọi phiếu)" value={preparer} onChange={setPreparer} placeholder={defaultPreparer ? `Tự điền: ${defaultPreparer}` : 'Tự điền theo người lập'} />
-              {batch && <TextField label="Người lập bảng kê / kết chuyển" value={signer} onChange={setSigner} placeholder={poster} />}
+              {batch && <TextField label="Người lập bảng kê / chốt sổ" value={signer} onChange={setSigner} placeholder={poster} />}
             </div>
             {docs.length > 0 && only !== 'bank' && (
               <div className="mt-4 border-t border-slate-200 pt-3">

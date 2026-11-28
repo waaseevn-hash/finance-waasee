@@ -24,9 +24,9 @@ import { friendlyError } from '../lib/db.js';
 import { currentMonth, daysBetween, fmtDate, todayISO } from '../lib/dates.js';
 import { fmtVND, matchSearch } from '../lib/format.js';
 import { cashBalance, holderBalances } from '../lib/calc.js';
-import { useCashHolders } from '../lib/holders.js';
+import { useCashHolders, usePayAccounts } from '../lib/holders.js';
 import { useCompany } from '../lib/brand.js';
-import { VSTATUS, VTYPE, advanceRemaining, bankFlow, cashEffect, isBank, isPartial, ledgerLines, openAdvances, requestedAmount, voucherAmount, voucherStats } from '../lib/vouchers.js';
+import { VSTATUS, VTYPE, advanceRemaining, bankFlow, batchFromDocs, cashEffect, docsOfBatch, isBank, isPartial, openAdvances, requestedAmount, voucherAmount, voucherStats } from '../lib/vouchers.js';
 import { approveVouchers, postVouchers } from '../lib/voucherService.js';
 import { downloadBatchXlsx } from '../lib/voucherExcel.js';
 import { useToast } from '../components/feedback.jsx';
@@ -46,7 +46,7 @@ const PADS = [
   { type: 'PC', title: 'Phiếu chi', note: 'Tiền mặt chi ra từ két' },
 ];
 
-/** Tổng hợp nhanh một tập chứng từ khi kết chuyển */
+/** Tổng hợp nhanh một tập chứng từ khi chốt sổ */
 function previewTotals(list) {
   let rc = 0;
   let rt = 0;
@@ -82,27 +82,6 @@ function previewTotals(list) {
 /** Tài khoản ngân hàng mặc định để chi / nhận chuyển khoản: ưu tiên tài khoản đã khai số tài khoản */
 const defaultPayBank = (banks = []) => banks.find((b) => b.accountNo) || banks[0] || null;
 
-/** Tổng hợp lại từ chứng từ hiện còn hiệu lực của một đợt (dùng khi in lại) */
-function batchFromDocs(batch, docs) {
-  const lines = ledgerLines(docs).filter((l) => !l.info);
-  const receipts = docs.filter((d) => d.type === 'PT');
-  const payments = docs.filter((d) => d.type === 'PC');
-  const rt = lines.filter((l) => l.debit === '1111').reduce((s, l) => s + l.amount, 0);
-  const pt = lines.filter((l) => l.credit === '1111').reduce((s, l) => s + l.amount, 0);
-  const bi = lines.filter((l) => l.debit === '1121').reduce((s, l) => s + l.amount, 0);
-  const bo = lines.filter((l) => l.credit === '1121').reduce((s, l) => s + l.amount, 0);
-  return {
-    ...batch,
-    receiptsCount: receipts.length,
-    receiptsTotal: rt,
-    paymentsCount: payments.length,
-    paymentsTotal: pt,
-    net: rt - pt,
-    bankInTotal: bi,
-    bankTotal: bo,
-    bankNet: bi - bo,
-  };
-}
 
 function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
   const Icon = TYPE_ICON[v.type];
@@ -126,6 +105,11 @@ function VoucherRow({ v, selectable, selected, onSelect, onOpen }) {
             <VTypeChip type={v.type} auto={v.auto} />
             {v.no && <span className="font-mono text-[11px] text-slate-500">{v.no}</span>}
             {isBank(v) && <span className="rounded bg-sapphire-50 px-1.5 py-px text-[10px] font-semibold text-sapphire-700 ring-1 ring-inset ring-sapphire-200">CK</span>}
+            {v.status === 'APPROVED' && v.paidAt && (
+              <span className="rounded bg-jade-50 px-1.5 py-px text-[10px] font-semibold text-jade-700 ring-1 ring-inset ring-jade-200" title={`Kế toán báo đã chi ${fmtDate(v.paidAt)}`}>
+                Đã chi
+              </span>
+            )}
           </span>
           <span className="mt-0.5 block text-xs text-slate-500 truncate">
             {fmtDate(v.date)} · {v.reason}
@@ -163,7 +147,7 @@ function CoverBars({ cash, approvedOut, pendingOut }) {
       <div className="flex items-center gap-2">
         <span className="w-14 shrink-0 text-[11px] text-slate-500">Cần chi</span>
         <span className="flex h-2.5 flex-1 gap-[2px] overflow-hidden rounded-full bg-slate-100">
-          {approvedOut > 0 && <span className="h-full rounded-full bg-sapphire-500" style={{ width: pct(approvedOut) }} title="Đã duyệt, chờ kết chuyển" />}
+          {approvedOut > 0 && <span className="h-full rounded-full bg-sapphire-500" style={{ width: pct(approvedOut) }} title="Đã duyệt, chờ chốt sổ" />}
           {pendingOut > 0 && <span className="h-full rounded-full bg-amber-400" style={{ width: pct(pendingOut) }} title="Chờ duyệt" />}
         </span>
       </div>
@@ -177,7 +161,7 @@ function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo,
   const needCash = s.pendingOut + s.approvedOut;
   const needBank = s.pendingBank + s.approvedBank;
   const need = needCash + needBank;
-  // Ưu tiên: kết chuyển các khoản đã duyệt trước, sau đó mới tới các khoản đang chờ duyệt (tính cả tiền mặt và tiền gửi)
+  // Ưu tiên: chốt sổ các khoản đã duyệt trước, sau đó mới tới các khoản đang chờ duyệt (tính cả tiền mặt và tiền gửi)
   const afterApproved = avail - s.approvedOut - s.approvedBank + s.approvedIn + s.approvedBankIn;
   const afterAll = afterApproved - s.pendingOut - s.pendingBank + s.pendingIn + s.pendingBankIn;
   const cashAfterAll = cash - needCash + s.approvedIn + s.pendingIn;
@@ -190,9 +174,9 @@ function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo,
   return (
     <Card className="mb-5">
       <div className="px-4 sm:px-5 pt-4">
-        <p className="font-display text-base font-bold text-ink-900">{treasury ? 'Dòng tiền và các khoản cần chi' : 'Các khoản tôi đề nghị chi'}</p>
+        <p className="font-display text-base font-bold text-ink-900">{treasury ? 'Dòng tiền và các khoản cần chi' : 'Các khoản cần chi'}</p>
         <p className="text-xs text-slate-500">
-          {treasury ? 'Tiền mặt (111) + tiền gửi ngân hàng (112) đối chiếu với chứng từ chờ duyệt và chờ kết chuyển' : 'Chứng từ của tôi đang chờ duyệt hoặc chờ kết chuyển'}
+          {treasury ? 'Tiền mặt + tiền gửi ngân hàng đối chiếu với khoản chờ duyệt và khoản đã duyệt chưa chi' : 'Khoản chờ duyệt và khoản Sếp đã duyệt chưa chốt sổ'}
         </p>
       </div>
       <div className={cx('grid gap-3 sm:gap-6 px-4 sm:px-5 pt-4 pb-3', treasury ? 'grid-cols-2' : 'grid-cols-1')}>
@@ -232,7 +216,7 @@ function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo,
               <p className="flex items-center gap-1.5">
                 <span className="h-2 w-2 shrink-0 rounded-full bg-sapphire-500" />
                 <span>
-                  Kết chuyển {s.approvedCount} chứng từ đã duyệt: <Left v={afterApproved} />
+                  Chi xong {s.approvedCount} khoản đã duyệt: <Left v={afterApproved} />
                 </span>
               </p>
             )}
@@ -262,7 +246,7 @@ function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo,
           onClick={s.pendingCount ? () => onGo(manager ? 'pending' : 'all') : undefined}
         />
         <MiniStat
-          label="Đã duyệt, chờ kết chuyển"
+          label="Đã duyệt, chờ chi / chốt sổ"
           value={`${s.approvedCount} chứng từ`}
           sub={
             s.approvedCount ? (
@@ -289,7 +273,7 @@ function VoucherSummary({ stats, cash, deposits, treasury, manager, ready, onGo,
           tone={s.advanceOpen ? 'text-amber-700' : 'text-slate-400'}
           onClick={s.advanceCount ? () => onGo('advances') : undefined}
         />
-        <MiniStat label="Chi phí ghi nhận tháng này" value={<Money value={s.expense} />} sub="theo TK chi phí (15x, 6xx, 8xx)" />
+        <MiniStat label="Chi phí ghi nhận tháng này" value={<Money value={s.expense} />} sub={treasury ? 'theo loại chi phí đã chốt sổ' : 'theo TK chi phí (15x, 6xx, 8xx)'} />
       </div>
     </Card>
   );
@@ -302,6 +286,7 @@ export default function Vouchers({ params }) {
   const company = useCompany();
   const manager = can(role, 'approveVouchers');
   const poster = can(role, 'postVouchers');
+  const acct = can(role, 'accountingView');
 
   const [tab, setTab] = useState(params?.tab || 'all');
   useEffect(() => {
@@ -322,7 +307,24 @@ export default function Vouchers({ params }) {
   const [confirmPost, setConfirmPost] = useState(false);
   const [busy, setBusy] = useState('');
   const [payBankId, setPayBankId] = useState('');
-  const payBank = (data.banks || []).find((b) => b.id === payBankId) || defaultPayBank(data.banks || []);
+  // Quản lý: danh sách ngân hàng đầy đủ (có số dư). Kế toán: danh sách tài khoản thanh toán (không có số dư)
+  const payAccounts = usePayAccounts(!can(role, 'viewTreasury'));
+  const bankChoices = can(role, 'viewTreasury') ? data.banks || [] : payAccounts;
+  const payBank = bankChoices.find((b) => b.id === payBankId) || defaultPayBank(bankChoices);
+
+  // Việc cần làm → "Chốt sổ & in phiếu": chọn sẵn các khoản đã chi
+  useEffect(() => {
+    if (tab !== 'post') return;
+    try {
+      const raw = sessionStorage.getItem('postSel');
+      if (!raw) return;
+      sessionStorage.removeItem('postSel');
+      const ids = JSON.parse(raw);
+      if (Array.isArray(ids) && ids.length) setPostSel(new Set(ids));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [tab]);
 
   // Mở chứng từ từ màn hình khác (vd Sổ quỹ bấm vào số phiếu)
   useEffect(() => {
@@ -396,7 +398,7 @@ export default function Vouchers({ params }) {
   const approveSelected = async () => {
     setBusy('approve');
     try {
-      const nums = await approveVouchers({ actor, ids: [...sel] });
+      const nums = await approveVouchers({ actor, ids: [...sel], list: data.vouchers || [] });
       toast.success(`Đã duyệt ${Object.keys(nums).length} chứng từ`);
       setSel(new Set());
     } catch (ex) {
@@ -410,11 +412,11 @@ export default function Vouchers({ params }) {
     setBusy('post');
     const before = cashBalance(data.cash);
     try {
-      const res = await postVouchers({ actor, ids: selectedForPost.map((v) => v.id), postDate, payBank: totals.bankTotal || totals.bankInTotal ? payBank : null });
-      toast.success(`Đã kết chuyển đợt ${res.batch.code}: ${res.batch.voucherIds.length} chứng từ gốc${res.batch.generatedIds.length ? ` + ${res.batch.generatedIds.length} phiếu tự động` : ''} đã ghi sổ quỹ và khóa`);
+      const res = await postVouchers({ actor, ids: selectedForPost.map((v) => v.id), postDate, payBank: totals.bankTotal || totals.bankInTotal ? payBank : null, canReadBanks: treasury });
+      toast.success(`Đã chốt sổ đợt ${res.batch.code}: ${res.batch.voucherIds.length} chứng từ gốc${res.batch.generatedIds.length ? ` + ${res.batch.generatedIds.length} phiếu tự động` : ''} đã ghi sổ quỹ và khóa`);
       setConfirmPost(false);
       setPostSel(new Set());
-      setPrint({ docs: res.docs, batch: res.batch, title: `Kết xuất in phiếu — đợt ${res.batch.code}`, fileBase: `Ket-chuyen_${res.batch.code}`, poster: actor.name, cash: { before }, paper });
+      setPrint({ docs: res.docs, batch: res.batch, title: `Chốt sổ — đợt ${res.batch.code}`, fileBase: `Chot-so_${res.batch.code}`, poster: actor.name, cash: { before }, paper });
     } catch (ex) {
       toast.error(friendlyError(ex));
     } finally {
@@ -422,28 +424,15 @@ export default function Vouchers({ params }) {
     }
   };
 
-  const batchDocs = (b) => {
-    const byId = new Map(all.map((v) => [v.id, v]));
-    const out = [];
-    for (const id of b.voucherIds || []) {
-      const v = byId.get(id);
-      if (!v || v.status !== 'POSTED' || v.postingBatchId !== b.id) continue;
-      out.push(v);
-      for (const g of v.generatedIds || []) {
-        const gv = byId.get(g);
-        if (gv && gv.status === 'POSTED') out.push(gv);
-      }
-    }
-    return out;
-  };
+  const batchDocs = (b) => docsOfBatch(b, all);
   const reprint = (b) => {
     const docs = batchDocs(b);
-    if (!docs.length) return toast.info('Tất cả chứng từ của đợt này đã được hủy kết chuyển.');
-    setPrint({ docs, batch: batchFromDocs(b, docs), title: `In lại đợt ${b.code}`, fileBase: `Ket-chuyen_${b.code}`, poster: b.posterName || '', cash: null, paper: 'A4' });
+    if (!docs.length) return toast.info('Tất cả chứng từ của đợt này đã được hủy chốt sổ.');
+    setPrint({ docs, batch: batchFromDocs(b, docs), title: `In lại đợt ${b.code}`, fileBase: `Chot-so_${b.code}`, poster: b.posterName || '', cash: null, paper: 'A4' });
   };
   const excel = async (b) => {
     const docs = batchDocs(b);
-    if (!docs.length) return toast.info('Tất cả chứng từ của đợt này đã được hủy kết chuyển.');
+    if (!docs.length) return toast.info('Tất cả chứng từ của đợt này đã được hủy chốt sổ.');
     try {
       await downloadBatchXlsx({ batch: batchFromDocs(b, docs), docs, company, poster: b.posterName || '' });
     } catch (ex) {
@@ -467,15 +456,17 @@ export default function Vouchers({ params }) {
 
   const tabs = manager
     ? [
-        { value: 'all', label: 'Tất cả chứng từ', icon: FileStack },
-        { value: 'pending', label: 'Chờ duyệt', icon: Inbox, count: pending.length },
-        { value: 'post', label: 'Kết xuất & kết chuyển', icon: Stamp, count: approved.length },
-        { value: 'batches', label: 'Đợt kết chuyển', icon: Layers, count: batches.length || null },
+        { value: 'all', label: 'Tất cả đề xuất', icon: FileStack },
+        { value: 'pending', label: 'Chờ Sếp duyệt', icon: Inbox, count: pending.length },
+        { value: 'post', label: 'Chuyển kế toán chi & Chốt sổ', icon: Stamp, count: approved.length },
+        { value: 'batches', label: 'Các lần chốt sổ', icon: Layers, count: batches.length || null },
         { value: 'advances', label: 'Tạm ứng nhân viên', icon: UserRoundCheck, count: advances.length || null },
       ]
     : [
-        { value: 'all', label: 'Chứng từ của tôi', icon: FileStack },
-        { value: 'advances', label: 'Tạm ứng của tôi', icon: UserRoundCheck, count: advances.length || null },
+        { value: 'all', label: 'Tất cả chứng từ', icon: FileStack },
+        ...(poster ? [{ value: 'post', label: 'Chốt sổ & in phiếu', icon: Stamp, count: approved.length }] : []),
+        ...(poster ? [{ value: 'batches', label: 'Sổ đã chốt — lưu chứng từ', icon: Layers, count: batches.length || null }] : []),
+        { value: 'advances', label: 'Tạm ứng', icon: UserRoundCheck, count: advances.length || null },
       ];
   const activeTab = tabs.some((t) => t.value === tab) ? tab : 'all';
 
@@ -484,8 +475,8 @@ export default function Vouchers({ params }) {
       <PageHeader
         icon={ReceiptText}
         tone="amber"
-        title="Chứng từ thu chi nội bộ"
-        subtitle={manager ? 'Lập → Duyệt → Kết xuất in phiếu & kết chuyển sổ quỹ · mẫu Thông tư 200' : 'Lập giấy đề nghị, phiếu thu / chi và theo dõi trạng thái duyệt'}
+        title={manager ? 'Đề xuất & Duyệt chi' : 'Đề xuất chi & Chứng từ'}
+        subtitle={manager ? 'Nhân viên đề xuất → Sếp duyệt → Kế toán chi tiền & chốt sổ' : 'Lập đề xuất · chi khoản Sếp đã duyệt · chốt sổ & in chứng từ Thông tư 200'}
       />
 
       {data.voucherError && (
@@ -616,7 +607,7 @@ export default function Vouchers({ params }) {
                 />
               </div>
               {approved.length === 0 ? (
-                <EmptyState icon={Stamp} title="Không có chứng từ chờ kết xuất" description="Chứng từ sau khi được duyệt sẽ nằm ở đây để in phiếu và ghi sổ quỹ." />
+                <EmptyState icon={Stamp} title="Không có khoản chờ chốt sổ" description="Khoản Sếp đã duyệt nằm ở đây; kế toán chi tiền, bấm “Đã chi”, rồi chốt sổ và in phiếu." />
               ) : (
                 <ul className="divide-y divide-slate-100">
                   {approved.map((v) => (
@@ -627,8 +618,8 @@ export default function Vouchers({ params }) {
             </div>
             <aside className="xl:col-span-4 p-4 sm:p-5 space-y-4 xl:sticky xl:top-20 self-start">
               <div>
-                <p className="font-display text-base font-bold text-ink-900">Đợt kết chuyển mới</p>
-                <p className="text-xs text-slate-500">Một thao tác: cấp số đợt · in phiếu · ghi sổ quỹ · khóa chứng từ</p>
+                <p className="font-display text-base font-bold text-ink-900">Chốt sổ đợt mới</p>
+                <p className="text-xs text-slate-500">Một thao tác: cấp số phiếu · ghi sổ quỹ tiền mặt{acct ? ' (111)' : ''} / tiền gửi{acct ? ' (112)' : ''} · khóa chứng từ · in phiếu</p>
               </div>
               <dl className="rounded-xl border border-slate-200 divide-y divide-slate-100 text-sm">
                 <div className="flex justify-between px-3 py-2">
@@ -681,31 +672,35 @@ export default function Vouchers({ params }) {
               {(totals.bankInTotal > 0 || totals.bankTotal > 0) && (
                 <Field label="Tài khoản ngân hàng của công ty (chi / nhận chuyển khoản)">
                   <Select value={payBank?.id || ''} onChange={(e) => setPayBankId(e.target.value)}>
-                    {(data.banks || []).length === 0 && <option value="">Chưa có tài khoản — thêm ở Vay & Hạn mức NH</option>}
-                    {(data.banks || []).map((b) => (
+                    {bankChoices.length === 0 && <option value="">Chưa có tài khoản — Sếp thêm ở Vay & Hạn mức NH</option>}
+                    {bankChoices.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
-                        {b.accountNo ? ` · ${b.accountNo}` : ' · chưa có số TK'} · dư {fmtVND(b.depositBalance || 0)}
+                        {b.accountNo ? ` · ${b.accountNo}` : ' · chưa có số TK'}
+                        {treasury ? ` · dư ${fmtVND(b.depositBalance || 0)}` : ''}
                       </option>
                     ))}
                   </Select>
+                  {!treasury && totals.bankTotal > totals.bankInTotal && (
+                    <span className="mt-1 block text-xs text-slate-500">Nếu số dư tiền gửi trên app không đủ, hệ thống sẽ từ chối chốt sổ — báo Sếp cập nhật số dư theo sao kê ngân hàng.</span>
+                  )}
                 </Field>
               )}
               {manager && can(role, 'viewTreasury') && (
                 <p className="text-xs text-slate-500">
-                  Tồn quỹ tiền mặt <Money value={cashBalance(data.cash)} className="font-semibold text-slate-700" /> → sau kết chuyển{' '}
+                  Tồn quỹ tiền mặt <Money value={cashBalance(data.cash)} className="font-semibold text-slate-700" /> → sau chốt sổ{' '}
                   <Money value={cashBalance(data.cash) + totals.net} className={cx('font-semibold', cashBalance(data.cash) + totals.net < 0 ? 'text-rose-700' : 'text-slate-700')} />
                   {payBank && (totals.bankInTotal > 0 || totals.bankTotal > 0) && (
                     <>
                       <br />
-                      Tiền gửi {payBank.name} <Money value={payBank.depositBalance || 0} className="font-semibold text-slate-700" /> → sau kết chuyển{' '}
+                      Tiền gửi {payBank.name} <Money value={payBank.depositBalance || 0} className="font-semibold text-slate-700" /> → sau chốt sổ{' '}
                       <Money value={(Number(payBank.depositBalance) || 0) + totals.bankNet} className={cx('font-semibold', (Number(payBank.depositBalance) || 0) + totals.bankNet < 0 ? 'text-rose-700' : 'text-slate-700')} />
                     </>
                   )}
                 </p>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Ngày kết chuyển">
+                <Field label="Ngày chốt sổ">
                   <Input type="date" value={postDate} max={todayISO()} onChange={(e) => setPostDate(e.target.value || todayISO())} />
                 </Field>
                 <Field label="Khổ in">
@@ -721,19 +716,19 @@ export default function Vouchers({ params }) {
                 </Field>
               </div>
               <Button variant="amber" size="lg" icon={Printer} className="w-full" disabled={!selectedForPost.length} onClick={() => setConfirmPost(true)}>
-                Kết xuất in phiếu & kết chuyển
+                Chốt sổ & in phiếu
               </Button>
               <p className="text-[11px] leading-relaxed text-slate-500">
-                Sau khi kết chuyển, chứng từ bị khóa và bút toán đi vào Sổ quỹ tiền mặt kèm số phiếu. Muốn sửa phải dùng “Hủy kết chuyển” (chỉ Chủ doanh nghiệp), hệ thống ghi bút toán đảo chứ không xóa.
+                Sau khi chốt sổ, chứng từ bị khóa và bút toán đi vào Sổ quỹ tiền mặt kèm số phiếu. Muốn sửa phải dùng “Hủy chốt sổ” (chỉ Chủ doanh nghiệp), hệ thống ghi bút toán đảo chứ không xóa.
               </p>
             </aside>
           </div>
         )}
 
         {/* ======================= ĐỢT KẾT CHUYỂN ======================= */}
-        {activeTab === 'batches' && manager && (
+        {activeTab === 'batches' && poster && (
           batches.length === 0 ? (
-            <EmptyState icon={Layers} title="Chưa có đợt kết chuyển nào" description="Mỗi lần “Kết xuất in phiếu & kết chuyển” tạo một đợt KC-YYYYMMDD-NN." />
+            <EmptyState icon={Layers} title="Chưa có lần chốt sổ nào" description="Mỗi lần “Chốt sổ & in phiếu” tạo một đợt KC-YYYYMMDD-NN để in lại và lưu hồ sơ." />
           ) : (
             <ul className="divide-y divide-slate-100">
               {batches.map((b) => (
@@ -745,7 +740,7 @@ export default function Vouchers({ params }) {
                     <div className="min-w-0">
                       <p className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-sm font-semibold text-ink-900">{b.code}</span>
-                        {b.status === 'REVERSED' ? <Badge tone="red">Đã hủy toàn bộ</Badge> : b.status === 'PARTIAL' ? <Badge tone="amber">Hủy {b.reversedCount} chứng từ</Badge> : <Badge tone="green">Đã kết chuyển</Badge>}
+                        {b.status === 'REVERSED' ? <Badge tone="red">Đã hủy toàn bộ</Badge> : b.status === 'PARTIAL' ? <Badge tone="amber">Hủy {b.reversedCount} chứng từ</Badge> : <Badge tone="green">Đã chốt sổ</Badge>}
                       </p>
                       <p className="text-xs text-slate-500">
                         {fmtDate(b.postDate)} · <Who id={b.createdBy} /> · {(b.voucherIds || []).length} chứng từ gốc, {(b.generatedIds || []).length} phiếu tự động
@@ -777,7 +772,7 @@ export default function Vouchers({ params }) {
         {/* ======================= TẠM ỨNG ======================= */}
         {activeTab === 'advances' && (
           advances.length === 0 ? (
-            <EmptyState icon={UserRoundCheck} title="Không có khoản tạm ứng nào còn phải quyết toán" description="Giấy đề nghị tạm ứng sau khi kết chuyển (đã chi tiền) sẽ hiện ở đây cho tới khi được thanh toán hết." />
+            <EmptyState icon={UserRoundCheck} title="Không có khoản tạm ứng nào còn phải quyết toán" description="Giấy đề nghị tạm ứng sau khi chốt sổ (đã chi tiền) sẽ hiện ở đây cho tới khi được thanh toán hết." />
           ) : (
             <ul className="divide-y divide-slate-100">
               {advances.map((a) => {
@@ -825,16 +820,16 @@ export default function Vouchers({ params }) {
 
       {!manager && (
         <p className="mt-3 text-xs text-slate-500">
-          Bạn đang xem chứng từ do chính bạn lập ({me?.email}). Duyệt, kết chuyển và in phiếu chính thức do Chủ doanh nghiệp / Đồng quản trị thực hiện.
+          Bạn thấy chứng từ do chính bạn lập ({me?.email}) và mọi khoản Sếp đã duyệt / đã chốt sổ. Duyệt chi do Chủ doanh nghiệp / Đồng quản trị thực hiện; chi tiền, chốt sổ và in phiếu do kế toán thực hiện.
         </p>
       )}
 
-      {/* ---------- hộp xác nhận kết chuyển ---------- */}
+      {/* ---------- hộp xác nhận chốt sổ ---------- */}
       <Modal
         open={confirmPost}
         onClose={() => busy !== 'post' && setConfirmPost(false)}
-        title="Kết xuất in phiếu & kết chuyển"
-        subtitle={`${selectedForPost.length} chứng từ · ngày kết chuyển ${fmtDate(postDate)}`}
+        title="Chốt sổ & in phiếu"
+        subtitle={`${selectedForPost.length} chứng từ · ngày chốt sổ ${fmtDate(postDate)}`}
         size="md"
         footer={
           <>
@@ -842,27 +837,27 @@ export default function Vouchers({ params }) {
               Quay lại
             </Button>
             <Button variant="amber" icon={Stamp} loading={busy === 'post'} onClick={doPost}>
-              Kết chuyển & mở bản in
+              Chốt sổ & mở bản in
             </Button>
           </>
         }
       >
         <ol className="space-y-2 text-sm text-slate-700 list-decimal pl-5">
-          <li>Tạo đợt kết chuyển mới, cấp số phiếu thu / phiếu chi cho phần hoàn ứng, chi bổ sung, chi tạm ứng.</li>
+          <li>Tạo đợt chốt sổ mới, cấp số phiếu thu / phiếu chi cho phần hoàn ứng, chi bổ sung, chi tạm ứng.</li>
           <li>
-            Ghi Sổ quỹ tiền mặt (TK 111): thu <b className="text-jade-700">{fmtVND(totals.receiptsTotal)}</b>, chi <b className="text-vermilion-700">{fmtVND(totals.paymentsTotal)}</b>.
+            Ghi Sổ quỹ tiền mặt{acct ? ' (TK 111)' : ''}: thu <b className="text-jade-700">{fmtVND(totals.receiptsTotal)}</b>, chi <b className="text-vermilion-700">{fmtVND(totals.paymentsTotal)}</b>.
           </li>
           {(totals.bankInTotal > 0 || totals.bankTotal > 0) && (
             <li>
-              Tiền gửi ngân hàng (TK 112) — <b>{payBank ? `${payBank.name}${payBank.accountNo ? ` · ${payBank.accountNo}` : ''}` : 'chưa chọn tài khoản'}</b>: nhận{' '}
+              Tiền gửi ngân hàng{acct ? ' (TK 112)' : ''} — <b>{payBank ? `${payBank.name}${payBank.accountNo ? ` · ${payBank.accountNo}` : ''}` : 'chưa chọn tài khoản'}</b>: nhận{' '}
               <b className="text-sapphire-700">{fmtVND(totals.bankInTotal)}</b>, chi <b className="text-sapphire-700">{fmtVND(totals.bankTotal)}</b>; số dư tiền gửi trên app được cập nhật theo. Bản in có <b>bảng kê lệnh chuyển khoản</b> (đủ số tài khoản người nhận) để kế toán đi lệnh.
             </li>
           )}
-          <li>Khóa các chứng từ (trạng thái “Đã kết chuyển”), cập nhật “Chi nội bộ” trong Điều phối tháng.</li>
+          <li>Khóa các chứng từ (trạng thái “Đã chốt sổ”), cập nhật “Chi nội bộ” trong Điều phối tháng.</li>
           <li>Mở bản in ({paper === 'A4' ? 'A4' : '2 liên A5'}) kèm bảng kê đợt; tải được PDF và Excel.</li>
         </ol>
         <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          An toàn khi bấm nhiều lần hoặc hai người cùng bấm: chứng từ nào đã được kết chuyển sẽ bị từ chối, không ghi trùng sổ quỹ.
+          An toàn khi bấm nhiều lần hoặc hai người cùng bấm: chứng từ nào đã được chốt sổ sẽ bị từ chối, không ghi trùng sổ quỹ.
         </p>
       </Modal>
 
@@ -890,7 +885,7 @@ export default function Vouchers({ params }) {
             setConfirmPost(true);
           }}
           onPosted={(res) =>
-            setPrint({ docs: res.docs, batch: res.batch, title: `Kết xuất in phiếu — đợt ${res.batch.code}`, fileBase: `Ket-chuyen_${res.batch.code}`, poster: actor.name, cash: res.cash, paper: 'A4' })
+            setPrint({ docs: res.docs, batch: res.batch, title: `Chốt sổ — đợt ${res.batch.code}`, fileBase: `Chot-so_${res.batch.code}`, poster: actor.name, cash: res.cash, paper: 'A4' })
           }
         />
       )}

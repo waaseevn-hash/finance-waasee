@@ -9,7 +9,7 @@
  *     hành động. => Không ai (kể cả gọi API trực tiếp) có thể sửa số
  *     liệu mà không để lại dấu vết. Nhật ký không thể sửa/xóa.
  */
-import { collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where, writeBatch } from 'firebase/firestore';
+import { collection, doc, increment, onSnapshot, query, runTransaction, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { db } from './firebase.js';
 
 
@@ -47,7 +47,7 @@ export const COLLECTION_LABEL = {
   plans: 'Bản nháp kế hoạch tháng',
   plan_snapshots: 'Kế hoạch tháng đã chốt',
   internal_vouchers: 'Chứng từ thu chi nội bộ',
-  posting_batches: 'Đợt kết chuyển chứng từ',
+  posting_batches: 'Đợt chốt sổ chứng từ',
 };
 
 
@@ -189,6 +189,14 @@ export class AuditedTx {
     this.tx.update(doc(db, coll, id), { ...patch, ...this._meta() });
     this.paths.push(`${coll}/${id}`);
     this.ops.push({ op: 'UPDATE', path: `${coll}/${id}`, changes: diffForLog(before, { ...before, ...patch }) });
+  }
+
+  /** Cộng / trừ một trường số mà không cần đọc trước (vd số dư tiền gửi khi kế toán chốt sổ) */
+  /** Cộng / trừ một trường số mà không cần đọc trước (người ghi không có quyền đọc tài liệu). extra: trường kèm theo */
+  adjust(coll, id, field, delta, extra = {}) {
+    this.tx.update(doc(db, coll, id), { [field]: increment(delta), ...extra, ...this._meta() });
+    this.paths.push(`${coll}/${id}`);
+    this.ops.push({ op: 'UPDATE', path: `${coll}/${id}`, changes: [{ field, from: null, to: `${delta >= 0 ? '+' : ''}${delta}` }] });
   }
 
   /** Ghi dòng nhật ký gộp — gọi cuối cùng trong hàm giao dịch */

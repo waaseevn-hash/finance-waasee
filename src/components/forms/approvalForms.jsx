@@ -8,6 +8,8 @@ import { fmtDate, todayISO } from '../../lib/dates.js';
 import { fmtVND } from '../../lib/format.js';
 import { can } from '../../lib/roles.js';
 import { downloadXlsx } from '../../lib/xlsx.js';
+import { notifyEvent } from '../../lib/notify.js';
+export { isHeld } from '../../lib/pending.js';
 import { Who } from '../Who.jsx';
 import { Money, MoneyInput } from '../Money.jsx';
 import { useConfirm, useToast } from '../feedback.jsx';
@@ -16,6 +18,67 @@ import { SupplierInfo, copyText, findSupplier } from './supplierForms.jsx';
 import { PaymentModal, raw } from './debtForms.jsx';
 
 /* ============================ Modal: Duyệt chi ============================ */
+/**
+ * Lưu lệnh duyệt chi một khoản phải trả (tạo mới hoặc sửa) và báo kế toán.
+ * mode: 'FULL' (chi hết số còn nợ) | 'PART' (chi một phần = amount)
+ */
+export async function saveApproval({ actor, debt, approval = null, mode = 'FULL', amount, note = '', suppliers = [] }) {
+  const rem = remaining(debt);
+  const amt = mode === 'FULL' ? rem : Math.round(Number(amount) || 0);
+  if (amt <= 0) throw new Error('Số tiền duyệt chi phải lớn hơn 0');
+  if (amt > rem) throw new Error(`Vượt số còn phải trả (${fmtVND(rem)})`);
+  const supplier = findSupplier(suppliers, debt);
+  const b = new AuditedBatch(actor);
+  const data = { mode, amount: amt, outstandingAtApproval: rem, note: String(note || '').trim() };
+  const label = `${APPROVAL_MODE[mode]} ${fmtVND(amt)} — ${debt.partnerName}`;
+  if (approval) {
+    b.update(C.approvals, approval.id, { ...data, approvedOn: todayISO() }, pickApproval(approval), `Sửa duyệt chi: ${label}`);
+  } else {
+    b.create(
+      C.approvals,
+      {
+        ...data,
+        payableId: debt.id,
+        partnerName: debt.partnerName,
+        description: debt.description || '',
+        supplierId: debt.supplierId || supplier?.id || '',
+        approvedOn: todayISO(),
+        status: 'OPEN',
+        paidAmount: 0,
+        paidOn: '',
+        paymentId: '',
+      },
+      `Duyệt chi: ${label}`,
+    );
+  }
+  // Khoản đang hoãn được duyệt lại: bỏ hoãn
+  if (debt.holdUntil) b.update(C.ap, debt.id, { holdUntil: '', holdNote: '' }, raw(debt), `Bỏ hoãn — ${debt.partnerName}`);
+  await b.commit();
+  notifyEvent('APPROVED', {
+    who: debt.partnerName,
+    what: `Công nợ phải trả${debt.description ? ` — ${debt.description}` : ''}`,
+    amount: amt,
+    requested: rem,
+    method: supplier?.bankAccount ? `Chuyển khoản ${supplier.bankName || ''} ${supplier.bankAccount}`.trim() : '',
+    by: actor.name || actor.email,
+  });
+  return amt;
+}
+
+/** Ngày đầu tháng sau (ISO) */
+const nextMonthStart = () => {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth() + 1, 1, 12).toISOString().slice(0, 10);
+};
+
+/** "Từ chối" một khoản phải trả = hoãn sang tháng sau (kèm lý do) — khoản nợ vẫn còn nguyên */
+export async function holdPayable({ actor, debt, reason, until = nextMonthStart() }) {
+  const b = new AuditedBatch(actor);
+  b.update(C.ap, debt.id, { holdUntil: until, holdNote: String(reason || '').trim().slice(0, 300) }, raw(debt), `Hoãn chi đến ${until} — ${debt.partnerName}${reason ? ` (${reason})` : ''}`);
+  await b.commit();
+  notifyEvent('REJECTED', { who: debt.partnerName, what: `Hoãn chi công nợ phải trả${debt.description ? ` — ${debt.description}` : ''}`, amount: remaining(debt), reason: reason || 'Hoãn sang tháng sau', by: actor.name || actor.email });
+}
+
 export function ApproveModal({ open, onClose, debt, approval, suppliers = [] }) {
   const { actor } = useAuth();
   const toast = useToast();
@@ -44,31 +107,8 @@ export function ApproveModal({ open, onClose, debt, approval, suppliers = [] }) 
     if (amount > rem) return setErr(`Vượt số còn phải trả (${fmtVND(rem)}). Chọn “Chi hết” nếu muốn trả toàn bộ.`);
     setBusy(true);
     try {
-      const b = new AuditedBatch(actor);
-      const data = { mode: f.mode, amount, outstandingAtApproval: rem, note: f.note.trim() };
-      const label = `${APPROVAL_MODE[f.mode]} ${fmtVND(amount)} — ${debt.partnerName}`;
-      if (approval) {
-        b.update(C.approvals, approval.id, { ...data, approvedOn: todayISO() }, pickApproval(approval), `Sửa duyệt chi: ${label}`);
-      } else {
-        b.create(
-          C.approvals,
-          {
-            ...data,
-            payableId: debt.id,
-            partnerName: debt.partnerName,
-            description: debt.description || '',
-            supplierId: debt.supplierId || supplier?.id || '',
-            approvedOn: todayISO(),
-            status: 'OPEN',
-            paidAmount: 0,
-            paidOn: '',
-            paymentId: '',
-          },
-          `Duyệt chi: ${label}`,
-        );
-      }
-      await b.commit();
-      toast.success(`Đã duyệt chi ${fmtVND(amount)} cho ${debt.partnerName} — kế toán sẽ thấy trong “Lệnh chi đã duyệt”`);
+      await saveApproval({ actor, debt, approval, mode: f.mode, amount, note: f.note, suppliers });
+      toast.success(`Đã duyệt chi ${fmtVND(amount)} cho ${debt.partnerName} — kế toán sẽ thấy trong “Cần chi ngay”`);
       onClose();
     } catch (ex) {
       toast.error(friendlyError(ex));

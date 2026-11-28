@@ -748,7 +748,7 @@ export function RowDrawer({ row, onClose, data, note, onNote, onApprove, onRemov
                   </div>
                 </div>
               )}
-              {row.kind === 'INTERNAL' && <p className="mt-2 text-xs text-slate-500">Số tiền lấy tự động từ các chứng từ đã duyệt, chưa kết chuyển.</p>}
+              {row.kind === 'INTERNAL' && <p className="mt-2 text-xs text-slate-500">Số tiền lấy tự động từ các chứng từ đã duyệt, chưa chốt sổ.</p>}
             </>
           )}
         </Block>
@@ -809,11 +809,11 @@ export function RowDrawer({ row, onClose, data, note, onNote, onApprove, onRemov
             <p className="mb-3 text-sm text-slate-600">
               Chờ kết xuất: chi <b>{fmtVND(internal.pendingOut + internal.pendingBank)}</b>
               {internal.pendingBank > 0 && <> (chuyển khoản {fmtVND(internal.pendingBank)})</>}
-              {internal.pendingIn > 0 && <>, thu {fmtVND(internal.pendingIn)}</>}. Phần đã kết chuyển trong tháng ({fmtVND(internal.postedOut)}) đã trừ vào tồn két nên không cộng lại.
+              {internal.pendingIn > 0 && <>, thu {fmtVND(internal.pendingIn)}</>}. Phần đã chốt sổ trong tháng ({fmtVND(internal.postedOut)}) đã trừ vào tồn két nên không cộng lại.
             </p>
             <div className="space-y-3">
               <VoucherList title="Chờ kết xuất (tính vào dự chi)" list={internal.pending} />
-              <VoucherList title="Đã kết chuyển trong tháng" list={internal.posted} muted />
+              <VoucherList title="Đã chốt sổ trong tháng" list={internal.posted} muted />
             </div>
           </Block>
         )}

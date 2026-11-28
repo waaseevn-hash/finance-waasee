@@ -459,9 +459,22 @@ export function MonthPicker({ value, onChange, className = '' }) {
 }
 
 /* ------------------------- Bảng responsive ------------------------ */
-export function TableWrap({ children, className = '' }) {
-  return <div className={cx('overflow-x-auto thin-scroll', className)}>{children}</div>;
+/**
+ * Khung bảng dùng chung: viền ngoài bo góc, kẻ ngang / dọc, tiêu đề đậm, sọc nhẹ, dòng tổng đậm
+ * (kiểu ở index.css → .dt-wrap). inset: chừa lề khi bảng nằm sát mép thẻ.
+ */
+export function TableWrap({ children, className = '', inset = true }) {
+  return <div className={cx('dt-wrap thin-scroll', inset && 'mx-3 my-3 sm:mx-4', className)}>{children}</div>;
+}
+/** Bảng dùng chung = TableWrap + table */
+export function Table({ children, className = '', wrapClass = '', inset = true }) {
+  return (
+    <TableWrap className={wrapClass} inset={inset}>
+      <table className={cx('w-full', className)}>{children}</table>
+    </TableWrap>
+  );
 }
 
-export const th = 'px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap';
+// Chữ căn trái; ngày / trạng thái căn giữa (thêm text-center); số tiền căn phải (thêm text-right)
+export const th = 'px-3 py-2.5 text-left text-xs font-semibold text-slate-700 whitespace-nowrap';
 export const td = 'px-3 py-2.5 text-sm text-slate-700 align-middle';

@@ -41,14 +41,15 @@ export const ACCOUNT_SETS = {
   ptCredit: ['141', '131', '138', '511', '711', '3388', '334', '1121'],
 };
 
-export function AccountSelect({ value, onChange, set = 'expense', className = '' }) {
+/** plain: chỉ hiện tên khoản mục (giao diện quản lý, không hiện số hiệu tài khoản) */
+export function AccountSelect({ value, onChange, set = 'expense', className = '', plain = false }) {
   const codes = ACCOUNT_SETS[set] || ACCOUNT_SETS.expense;
   const list = codes.map((c) => ACCOUNTS.find(([x]) => x === c)).filter(Boolean);
   return (
     <Select value={value} onChange={(e) => onChange(e.target.value)} className={className}>
       {list.map(([c, n]) => (
         <option key={c} value={c}>
-          {c} — {n}
+          {plain ? n : `${c} — ${n}`}
         </option>
       ))}
     </Select>
