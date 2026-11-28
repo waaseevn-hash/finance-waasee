@@ -66,12 +66,17 @@ function Metric({ label, short, value, tone, dot, sub }) {
 }
 
 /** Nút Chốt / Xuất cho điện thoại (không dính, nằm dưới tiêu đề trang) */
-export function PlanActionsMobile({ onLock, onPdf, onExcel, exporting }) {
+export function PlanActionsMobile({ onLock, onPdf, onExcel, onSheet, exporting }) {
   return (
-    <div className="md:hidden flex w-full gap-2">
+    <div className="md:hidden flex w-full flex-wrap gap-2">
       <Button variant="orchid" size="sm" icon={Lock} onClick={onLock} className="flex-1">
         Chốt kế hoạch tháng
       </Button>
+      {onSheet && (
+        <Button size="sm" icon={Stamp} onClick={onSheet}>
+          Bảng duyệt chi
+        </Button>
+      )}
       <Button size="sm" icon={Printer} onClick={onPdf} loading={exporting}>
         PDF
       </Button>
@@ -82,7 +87,7 @@ export function PlanActionsMobile({ onLock, onPdf, onExcel, exporting }) {
   );
 }
 
-export function PlanTopBar({ plan, onLock, onPdf, onExcel, exporting }) {
+export function PlanTopBar({ plan, onLock, onPdf, onExcel, onSheet, exporting }) {
   const after = plan.balanceAvailable;
   const short = after < 0;
   let sub;
@@ -104,6 +109,12 @@ export function PlanTopBar({ plan, onLock, onPdf, onExcel, exporting }) {
             <span className="xl:hidden">Chốt tháng</span>
             <span className="hidden xl:inline">Chốt kế hoạch tháng</span>
           </Button>
+          {onSheet && (
+            <Button size="sm" icon={Stamp} onClick={onSheet} title="In Bảng đề xuất & duyệt chi để Sếp duyệt bằng bút">
+              <span className="xl:hidden">Bảng duyệt</span>
+              <span className="hidden xl:inline">In bảng duyệt chi</span>
+            </Button>
+          )}
           <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" aria-label="Xuất báo cáo">
             <button type="button" onClick={onPdf} disabled={exporting} title="Xuất PDF" className="inline-flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
               <Printer className="h-4 w-4" /> <span className="hidden xl:inline">PDF</span>

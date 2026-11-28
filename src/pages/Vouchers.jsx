@@ -38,6 +38,7 @@ import { TYPE_ICON, TYPE_STYLE, VStatusBadge, VTypeChip } from '../components/vo
 import { VoucherEditor } from '../components/vouchers/VoucherEditor.jsx';
 import { VoucherDrawer } from '../components/vouchers/VoucherDrawer.jsx';
 import { PrintPreview } from '../components/vouchers/PrintPreview.jsx';
+import { PayOrderButton } from '../components/PayOrderPrint.jsx';
 
 const PADS = [
   { type: 'TU', title: 'Đề nghị tạm ứng', note: 'Ứng tiền trước để đi công tác, mua hàng' },
@@ -600,6 +601,9 @@ export default function Vouchers({ params }) {
           <div className="grid grid-cols-1 xl:grid-cols-12">
             <div className="xl:col-span-8 border-b xl:border-b-0 xl:border-r border-slate-100">
               <div className="flex flex-wrap items-center gap-2 px-4 sm:px-5 py-3 border-b border-slate-100">
+                <span className="order-last ml-auto">
+                  <PayOrderButton size="sm" label={manager ? 'In lệnh chi bàn giao kế toán' : 'In lệnh chi / bàn giao'} />
+                </span>
                 <Checkbox
                   checked={approved.length > 0 && postSel.size === approved.length}
                   onChange={(on) => setPostSel(on ? new Set(approved.map((v) => v.id)) : new Set())}

@@ -616,7 +616,15 @@ export function buildPrintHtml({ batch = null, docs = [], company, paper = 'A4',
     if (!batch && bankList && docs.some((d) => isBank(d) && d.type !== 'PT' && d.status === 'POSTED')) pages.push(`<section class="page a4">${bankList}</section>`);
     if (files.length) pages.push(attachmentPages(files));
   }
-  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${css(fontBase)}</style></head>
+  return wrapPages(pages, { title, fontBase });
+}
+
+/**
+ * Bọc các trang A4 thành tài liệu in hoàn chỉnh (phông nhúng, tự co theo khung xem trước).
+ * extraCss: CSS riêng của mẫu in (bảng duyệt chi, lệnh chi…)
+ */
+export function wrapPages(pages, { title = 'Bản in', fontBase = defaultFontBase(), extraCss = '' } = {}) {
+  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${css(fontBase)}${extraCss}</style></head>
 <body>${pages.join('\n') || '<section class="page a4"><p>Không có nội dung để in.</p></section>'}
 <script>
 (function(){
@@ -632,4 +640,4 @@ export function buildPrintHtml({ batch = null, docs = [], company, paper = 'A4',
 /** Có khoản chuyển khoản nào trong danh sách in không */
 export const hasBankPayments = (docs) => bankPayments(docs).length > 0;
 
-export { longDate, shortDate, accountName };
+export { longDate, shortDate, accountName, esc, money, words, signatures, defaultFontBase };

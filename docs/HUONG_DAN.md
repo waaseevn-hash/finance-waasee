@@ -83,6 +83,13 @@ Kế toán đăng nhập vào thẳng **Việc cần làm**, gồm 3 hàng đợ
 
 Chuông của kế toán báo khoản Sếp vừa duyệt và khoản bị từ chối (kèm lý do); số đỏ là số tin chưa xem.
 
+### 6b'. Hai bản in cho Sếp và kế toán (không có mã tài khoản)
+
+- **Bảng đề xuất & duyệt chi tháng** — ở **Điều phối tháng**, bấm **In bảng duyệt chi**. Đầu trang có 3 ô: Tổng tiền có thể chi, Tổng tiền đề xuất chi, Chênh lệch thừa / thiếu. Bảng chia nhóm P1 / P2 / P3, mỗi nhóm có dòng cộng; cột “Duyệt” có ô ☐ Chi ☐ Hoãn và cột “Số Sếp chốt & Ghi chú” để ghi tay. Cuối trang: Tổng số tiền Giám đốc duyệt chi, chữ ký Người lập đề xuất và Giám đốc phê duyệt.
+- **Lệnh chi / bàn giao thanh toán** — kế toán bấm ở tab “2. Sếp đã duyệt — Cần chi ngay”; Sếp bấm ở thẻ “Chuyển kế toán chi & Chốt sổ” hoặc trên Tổng quan. Phần I chuyển khoản (người thụ hưởng, số tài khoản, ngân hàng, số Sếp duyệt, nội dung chuyển khoản), Phần II tiền mặt (người nhận, nội dung, số tiền, cột người nhận ký), tổng cộng bằng chữ, chữ ký Người lập, Kế toán trưởng, Thủ quỹ, Giám đốc.
+- Phiếu thu, phiếu chi, giấy đề nghị theo Thông tư 200 vẫn in ở bước chốt sổ của kế toán.
+- Cả hai bản in có nút **Thông tin in** (ngày lập, người lập, đơn vị, người ký), **In / Lưu PDF** và **Tải PDF**.
+
 ### 6c. Thông báo đẩy về điện thoại
 
 **Phân quyền & Cài đặt → Thông báo đẩy** (chỉ Chủ DN):

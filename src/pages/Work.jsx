@@ -13,6 +13,7 @@ import { useData } from '../context/DataContext.jsx';
 import { fmtDate, todayISO } from '../lib/dates.js';
 import { fmtVND } from '../lib/format.js';
 import { batchFromDocs, docsOfBatch, isBank, voucherAmount } from '../lib/vouchers.js';
+import { PayOrderButton } from '../components/PayOrderPrint.jsx';
 import { useToast } from '../components/feedback.jsx';
 import { useToPay } from '../components/NotificationCenter.jsx';
 import { useApprovalFlow } from '../components/forms/approvalForms.jsx';
@@ -273,6 +274,14 @@ export default function Work({ params, navigate }) {
         )}
 
         {/* ========================= 2. SẾP ĐÃ DUYỆT — CẦN CHI NGAY ========================= */}
+        {active === '2' && toPay.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 px-4 pt-3 sm:px-5">
+            <p className="flex-1 text-sm text-slate-600">
+              Chuyển khoản <b className="text-ink-900">{bankPay.length}</b> món · tiền mặt <b className="text-ink-900">{cashPay.length}</b> món
+            </p>
+            <PayOrderButton />
+          </div>
+        )}
         {active === '2' &&
           (toPay.length === 0 ? (
             <EmptyState icon={CircleCheck} title="Không có khoản nào cần chi" description="Khi Sếp duyệt một đề xuất hoặc công nợ, khoản đó hiện ở đây kèm thông báo." />

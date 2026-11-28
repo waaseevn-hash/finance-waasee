@@ -25,6 +25,7 @@ import { BankUsageBars, CashFlowChart } from '../components/Charts.jsx';
 import { Card, CardHeader, Drawer, EmptyState, PageHeader, Spinner, StatTile, cx } from '../components/ui.jsx';
 import { QuickApprovalList, useMoneyNow, usePendingApprovals } from '../components/NotificationCenter.jsx';
 import { MAIN_HOLDER, holderBalances } from '../lib/calc.js';
+import { PayOrderButton } from '../components/PayOrderPrint.jsx';
 import { useCashHolders } from '../lib/holders.js';
 
 const KIND_ICON = { LOAN: Landmark, AR: CircleArrowDown, AP: CircleArrowUp };
@@ -103,6 +104,11 @@ export default function Dashboard() {
           </span>
           <span className="font-semibold underline">Xem danh sách đi lệnh</span>
         </a>
+      )}
+      {approver && orders.length > 0 && (
+        <div className="-mt-3 mb-5 flex justify-end">
+          <PayOrderButton size="sm" label="In lệnh chi bàn giao kế toán" />
+        </div>
       )}
 
       {treasury && (

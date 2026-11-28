@@ -77,6 +77,8 @@ import { resolveNames } from '../lib/runtime.js';
 import { exportReport } from '../lib/exportReport.js';
 import { internalForPlan } from '../lib/vouchers.js';
 import { downloadPlanXlsx } from '../lib/planExcel.js';
+import { buildApprovalSheetHtml } from '../lib/approvalPrint.js';
+import { SheetPreview } from '../components/SheetPreview.jsx';
 import { getCompanyName } from '../lib/brand.js';
 import { CashInStrip, PlanActionsMobile, PlanTopBar, PriorityTable, RowDrawer, matchFilter } from '../components/planner/PlanParts.jsx';
 
@@ -745,6 +747,7 @@ export default function Planner() {
   const [settings, setSettings] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [modal, setModal] = useState(null); // 'fixed' | 'extraAp' | 'extraAr' | 'lock'
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [viewSnap, setViewSnap] = useState(null);
   const [reportDoc, setReportDoc] = useState(null);
   const reportRef = useRef(null);
@@ -890,7 +893,7 @@ export default function Planner() {
         kind: 'INTERNAL',
         refId: null,
         label: 'Chi tiêu nội bộ đã duyệt',
-        partner: `${internal.pending.length} chứng từ chờ kết xuất`,
+        partner: `${internal.pending.length} đề xuất đã duyệt, chờ chi`,
         dueDate: null,
         outstanding: internal.pendingOut + internal.pendingBank,
         defaultPriority: 'P1',
@@ -1181,6 +1184,19 @@ export default function Planner() {
   };
 
   const negative = plan.balance < 0;
+  // Bảng đề xuất & duyệt chi (in cho Sếp duyệt bằng bút): chỉ các khoản đang chọn chi, không mã tài khoản / mã hệ thống
+  const sheetItems = plan.rows
+    .filter((r) => r.selected && (Number(r.amount) || 0) > 0)
+    .map((r) => ({
+      priority: r.priority,
+      who: r.kind === 'CUSTOM' ? r.label : r.partner || r.label,
+      what: r.kind === 'CUSTOM' ? r.category || 'Chi cố định' : r.partner ? r.label : r.category || '',
+      due: r.dueDate || '',
+      amount: Number(r.amount) || 0,
+      part: r.kind === 'AP' && r.mode === 'PART',
+      note: draft?.items?.[r.key]?.note || '',
+    }));
+  const buildSheet = ({ company, preparer, date }) => buildApprovalSheetHtml({ month, company, available: plan.available, items: sheetItems, preparer, date });
   const exportPdf = () => startExport({ ...buildSnapshot(), version: null, createdBy: actor.email }, null);
   const exportExcel = async () => {
     try {
@@ -1202,7 +1218,7 @@ export default function Planner() {
           <>
             <MonthPicker value={month} onChange={setMonth} />
             <SaveBadge />
-            <PlanActionsMobile exporting={!!reportDoc} onLock={() => setModal('lock')} onPdf={exportPdf} onExcel={exportExcel} />
+            <PlanActionsMobile exporting={!!reportDoc} onLock={() => setModal('lock')} onPdf={exportPdf} onExcel={exportExcel} onSheet={() => setSheetOpen(true)} />
           </>
         }
       />
@@ -1246,6 +1262,15 @@ export default function Planner() {
         onLock={() => setModal('lock')}
         onPdf={exportPdf}
         onExcel={exportExcel}
+        onSheet={() => setSheetOpen(true)}
+      />
+      <SheetPreview
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title={`Bảng đề xuất & duyệt chi — ${monthLabel(month)}`}
+        subtitle={`${sheetItems.length} khoản đang chọn chi · in ra để Giám đốc duyệt bằng bút`}
+        fileBase={`De-xuat-duyet-chi_${month}`}
+        build={buildSheet}
       />
 
       {/* ===================== TẦNG 2: NGUỒN TIỀN VÀO ===================== */}
